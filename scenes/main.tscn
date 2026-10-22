@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://bot5fhwiy4jj5"]
+
+[ext_resource type="Script" uid="uid://dlx1xoolnpi3i" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://scenes/dungeon.tscn" id="2_dungeon"]
+[ext_resource type="PackedScene" path="res://scenes/hud.tscn" id="3_hud"]
+
+[node name="Main" type="Node2D" unique_id=320584558]
+script = ExtResource("1_main")
+
+[node name="Dungeon" parent="." unique_id=479067898 instance=ExtResource("2_dungeon")]
+
+[node name="Actors" type="Node2D" parent="." unique_id=1742007804]
+y_sort_enabled = true
+
+[node name="HUD" parent="." unique_id=735640216 instance=ExtResource("3_hud")]

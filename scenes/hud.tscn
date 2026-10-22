@@ -1,0 +1,164 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/hud.gd" id="1_hud"]
+
+[node name="HUD" type="CanvasLayer"]
+script = ExtResource("1_hud")
+
+[node name="Root" type="Control" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Hearts" type="HBoxContainer" parent="Root"]
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 240.0
+offset_bottom = 30.0
+mouse_filter = 2
+theme_override_constants/separation = 3
+
+[node name="Coin" type="HBoxContainer" parent="Root"]
+offset_left = 10.0
+offset_top = 34.0
+offset_right = 160.0
+offset_bottom = 56.0
+mouse_filter = 2
+theme_override_constants/separation = 5
+
+[node name="CoinIcon" type="TextureRect" parent="Root/Coin"]
+custom_minimum_size = Vector2(12, 14)
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 5
+texture_filter = 1
+
+[node name="CoinLabel" type="Label" parent="Root/Coin"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.86, 0.45, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 15
+text = "0"
+vertical_alignment = 1
+
+[node name="Depth" type="Label" parent="Root"]
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -150.0
+offset_top = 6.0
+offset_right = -10.0
+offset_bottom = 30.0
+grow_horizontal = 0
+theme_override_colors/font_color = Color(0.95, 0.9, 0.8, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 18
+text = "B1"
+horizontal_alignment = 2
+
+[node name="Enemies" type="Label" parent="Root"]
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -150.0
+offset_top = 32.0
+offset_right = -10.0
+offset_bottom = 52.0
+grow_horizontal = 0
+theme_override_colors/font_color = Color(0.85, 0.55, 0.55, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 12
+text = ""
+horizontal_alignment = 2
+
+[node name="Message" type="Label" parent="Root"]
+anchor_right = 1.0
+offset_top = 62.0
+offset_bottom = 92.0
+theme_override_colors/font_color = Color(1, 0.93, 0.72, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 20
+text = ""
+horizontal_alignment = 1
+
+[node name="Hint" type="Label" parent="Root"]
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -24.0
+offset_bottom = -6.0
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.78, 0.76, 0.82, 0.85)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 0.9)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 10
+text = "WASD MOVE    SPACE ATTACK    SHIFT DASH    E OPEN CHEST    ESC MENU"
+horizontal_alignment = 1
+
+[node name="Flash" type="ColorRect" parent="Root"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.85, 0.1, 0.15, 0)
+
+[node name="Fade" type="ColorRect" parent="Root"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Death" type="Control" parent="Root"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Bg" type="ColorRect" parent="Root/Death"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.02, 0.01, 0.03, 0.72)
+
+[node name="Box" type="VBoxContainer" parent="Root/Death"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -70.0
+offset_right = 220.0
+offset_bottom = 70.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Root/Death/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.27, 0.24, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.02, 0.03, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 44
+text = "YOU DIED"
+horizontal_alignment = 1
+
+[node name="Sub" type="Label" parent="Root/Death/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.87, 0.8, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.02, 0.03, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 14
+text = "PRESS R TO RESTART      ESC FOR MENU"
+horizontal_alignment = 1
