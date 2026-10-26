@@ -1,0 +1,7 @@
+res://scenes/player.tscn
+res://scripts/dungeon.gd
+res://scripts/enemy.gd
+res://scripts/game.gd
+res://scripts/main.gd
+res://scripts/player.gd
+res://scenes/main.tscn

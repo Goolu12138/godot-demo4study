@@ -57,6 +57,7 @@ func _setup_input() -> void:
 	_bind_keys("interact", [KEY_E])
 	_bind_keys("restart", [KEY_R])
 	_bind_keys("menu", [KEY_ESCAPE])
+	_bind_keys("bag", [KEY_TAB])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
 
 

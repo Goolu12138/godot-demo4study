@@ -6,6 +6,7 @@ class_name Dungeon
 const CELL := 16
 ## 顶墙做成两格厚，门（32x32）才能完整嵌进墙里。
 const TOP_WALL_ROWS := 2
+const SEARCH_RANGE := 30.0
 
 var room := Vector2i(26, 16)
 var floor_layer: TileMapLayer
@@ -21,6 +22,8 @@ var _chest_pos := Vector2.ZERO
 var _chest_open := false
 var _door_open := false
 var _occupied: Dictionary = {}
+## 可搜索容器：{sprite, pos, kind, rolls, opened}
+var _searchables: Array[Dictionary] = []
 
 
 func generate(seed_value: int, _depth: int) -> void:
@@ -54,6 +57,7 @@ func _clear() -> void:
 	wall_layer = null
 	door_sprite = null
 	chest_sprite = null
+	_searchables.clear()
 
 
 # ---------------------------------------------------------------- 瓦片
@@ -164,6 +168,7 @@ func _place_chest() -> void:
 	chest_sprite.z_index = -1
 	add_child(chest_sprite)
 	_chest_pos = chest_sprite.position
+	_register_searchable(chest_sprite, "chest", 3)
 
 
 func _place_props() -> void:
@@ -199,6 +204,7 @@ func _place_props() -> void:
 		crate.position = _cell_center(cell) - Vector2(0, 4)
 		crate.z_index = -1
 		add_child(crate)
+		_register_searchable(crate, "crate", 1)
 
 
 # ---------------------------------------------------------------- 查询接口
@@ -230,7 +236,7 @@ func at_door(world_pos: Vector2) -> bool:
 
 
 func can_open_chest(world_pos: Vector2) -> bool:
-	return not _chest_open and world_pos.distance_to(_chest_pos) < 30.0
+	return not _chest_open and world_pos.distance_to(_chest_pos) < SEARCH_RANGE
 
 
 func is_chest_open() -> bool:
@@ -241,15 +247,59 @@ func door_point() -> Vector2:
 	return _door_pos
 
 
-func open_chest() -> void:
-	if _chest_open:
-		return
-	_chest_open = true
-	chest_sprite.play("default")
-
-
 func chest_position() -> Vector2:
 	return _chest_pos
+
+
+# ---------------------------------------------------------------- 搜索
+
+func _register_searchable(sprite: Node2D, kind: String, rolls: int) -> void:
+	_searchables.append({
+		"sprite": sprite,
+		"pos": sprite.position,
+		"kind": kind,
+		"rolls": rolls,
+		"opened": false,
+	})
+
+
+## 身边是否有还没搜过的容器。
+func can_search(world_pos: Vector2) -> bool:
+	return _nearest_searchable(world_pos) >= 0
+
+
+func _nearest_searchable(world_pos: Vector2) -> int:
+	var best := -1
+	var best_dist := SEARCH_RANGE
+	for i in _searchables.size():
+		var entry: Dictionary = _searchables[i]
+		if bool(entry.opened):
+			continue
+		var dist: float = world_pos.distance_to(entry.pos)
+		if dist < best_dist:
+			best_dist = dist
+			best = i
+	return best
+
+
+## 搜最近的容器，返回 {found, kind, rolls, pos}。一个容器只能搜一次。
+func search(world_pos: Vector2) -> Dictionary:
+	var index := _nearest_searchable(world_pos)
+	if index < 0:
+		return {"found": false}
+	var entry: Dictionary = _searchables[index]
+	entry.opened = true
+	_searchables[index] = entry
+	var sprite: Node2D = entry.sprite
+	if entry.kind == "chest":
+		_chest_open = true
+		chest_sprite.play("default")
+	else:
+		sprite.modulate = Color(0.55, 0.5, 0.45, 1.0)
+		var tween := create_tween()
+		tween.tween_property(sprite, "scale", Vector2(1.12, 0.88), 0.08)
+		tween.tween_property(sprite, "scale", Vector2.ONE, 0.14)
+	return {"found": true, "kind": entry.kind, "rolls": int(entry.rolls), "pos": entry.pos}
 
 
 func random_floor_point(min_from_spawn := 0.0, margin := 2) -> Vector2:
