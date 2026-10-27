@@ -74,6 +74,32 @@ theme_override_font_sizes/font_size = 12
 text = ""
 horizontal_alignment = 2
 
+[node name="Loot" type="Label" parent="Root"]
+offset_left = 10.0
+offset_top = 58.0
+offset_right = 260.0
+offset_bottom = 76.0
+theme_override_colors/font_color = Color(1, 0.86, 0.45, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 11
+text = "LOOT 0   ·   0 G"
+
+[node name="Timer" type="Label" parent="Root"]
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -70.0
+offset_top = 6.0
+offset_right = 70.0
+offset_bottom = 30.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.95, 0.9, 0.8, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 18
+text = "2:30"
+horizontal_alignment = 1
+
 [node name="Message" type="Label" parent="Root"]
 anchor_right = 1.0
 offset_top = 62.0
@@ -96,7 +122,61 @@ theme_override_colors/font_color = Color(0.78, 0.76, 0.82, 0.85)
 theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 0.9)
 theme_override_constants/outline_size = 4
 theme_override_font_sizes/font_size = 10
-text = "WASD MOVE    SPACE ATTACK    SHIFT DASH    E OPEN CHEST    ESC MENU"
+text = "WASD MOVE    SPACE ATTACK    SHIFT DASH    E SEARCH    ESC ABANDON"
+horizontal_alignment = 1
+
+[node name="Bag" type="Control" parent="Root"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Bg" type="ColorRect" parent="Root/Bag"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.02, 0.01, 0.03, 0.78)
+
+[node name="Panel" type="PanelContainer" parent="Root/Bag"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -170.0
+offset_top = -118.0
+offset_right = 170.0
+offset_bottom = 118.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Box" type="VBoxContainer" parent="Root/Bag/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Root/Bag/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.86, 0.45, 1)
+theme_override_colors/font_outline_color = Color(0.05, 0.03, 0.06, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 16
+text = "BACKPACK"
+horizontal_alignment = 1
+
+[node name="Slots" type="GridContainer" parent="Root/Bag/Panel/Box"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 6
+theme_override_constants/v_separation = 6
+columns = 3
+
+[node name="Hint" type="Label" parent="Root/Bag/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.76, 0.82, 1)
+theme_override_font_sizes/font_size = 9
+text = "CLICK AN ITEM TO DROP IT   ·   TAB TO CLOSE"
 horizontal_alignment = 1
 
 [node name="Flash" type="ColorRect" parent="Root"]

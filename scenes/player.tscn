@@ -1,4 +1,4 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=3 format=3 uid="uid://bdlwvandw3w84"]
 
 [ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
 
@@ -7,23 +7,22 @@ radius = 5.0
 height = 12.0
 
 [node name="Player" type="CharacterBody2D"]
-collision_layer = 1
 collision_mask = 4
 motion_mode = 1
 script = ExtResource("1_player")
 
 [node name="Sprite" type="AnimatedSprite2D" parent="."]
-position = Vector2(0, -14)
 texture_filter = 1
+position = Vector2(0, -14)
 
 [node name="SwordPivot" type="Node2D" parent="."]
 position = Vector2(0, -12)
 
 [node name="Sword" type="Sprite2D" parent="SwordPivot"]
 visible = false
-position = Vector2(18, 0)
-rotation = -1.5707964
 texture_filter = 1
+position = Vector2(18, 0)
+rotation = -1.5708
 
 [node name="Collision" type="CollisionShape2D" parent="."]
 position = Vector2(0, -5)

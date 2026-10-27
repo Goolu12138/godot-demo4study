@@ -1,20 +1,60 @@
 extends Node2D
-## 游戏循环：生成房间 -> 清怪 -> 开门 -> 下一层。玩家死亡后按 R 重开。
+## 搜打撤循环：进图 -> 搜索容器 / 清场 -> 限时内从撤离点离开 -> 回休息处。
+##
+## 规则：
+##   - 贵重品只记估值，装备先放进 6 格背包，两者都要成功撤离才结算；
+##   - 清场后撤离点（顶墙的门）开启，走进去结算；
+##   - 死亡 / 倒计时归零 / 主动放弃：背包清空，身上的武器与护甲一起丢失；
+##   - 撤离或死亡后自动回到休息处，仓库在那边。
 
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
-const COIN_FRAMES := ["coin_anim_f0", "coin_anim_f1", "coin_anim_f2", "coin_anim_f3"]
+
+## 一局的时间预算，超时视为死亡。
+const RUN_TIME := 150.0
+
+## 背包只装装备，格子满了必须丢一件才能捡新的。
+const BAG_SIZE := 6
+
+## 贵重品：直接折算成撤离时的金币。
+const VALUE_TABLE := [
+	{"id": "coins", "value": 5, "tex": "coin_anim_f0", "weight": 50},
+	{"id": "potion", "value": 15, "tex": "flask_big_red", "weight": 28},
+	{"id": "relic", "value": 30, "tex": "flask_big_blue", "weight": 15},
+	{"id": "idol", "value": 60, "tex": "skull", "weight": 7},
+]
+
+## 装备掉落：越深的 RAID 越容易掉高阶货。
+const GEAR_TABLE := [
+	{"kind": "weapon", "id": "knight_sword", "weight": 32},
+	{"kind": "armor", "id": "leather", "weight": 28},
+	{"kind": "weapon", "id": "katana", "weight": 18},
+	{"kind": "armor", "id": "chain", "weight": 14},
+	{"kind": "weapon", "id": "golden_sword", "weight": 4},
+	{"kind": "armor", "id": "plate", "weight": 4},
+]
 
 @onready var dungeon: Dungeon = $Dungeon
 @onready var actors: Node2D = $Actors
 @onready var hud: GameHud = $HUD
 
 var player: Player
-var depth := 1
-var coins := 0
-var state := "playing"  # playing / cleared / transition / dead
+var raid := 1
+var loot_value := 0
+var loot_count := 0
+## 背包内容：[{kind, id, name, tex, bonus, bonus_text}]
+var bag: Array[Dictionary] = []
+var bag_open := false
+var time_left := RUN_TIME
+## playing / cleared / extracting / dead / ended
+var state := "playing"
 var enemies_alive := 0
+## 测试与截图模式可以关掉自动回城。
+var auto_return := true
+
 var _last_hp := 0
+var _hint := ""
+var _full_warn := 0.0
 
 
 func _ready() -> void:
@@ -22,6 +62,7 @@ func _ready() -> void:
 	actors.add_child(player)
 	player.health_changed.connect(_on_health_changed)
 	player.died.connect(_on_player_died)
+	hud.bag_drop.connect(drop_bag_item)
 	_start_run()
 	if "--shot" in OS.get_cmdline_user_args():
 		_capture_after_delay()
@@ -31,56 +72,101 @@ func _ready() -> void:
 		_diagnose()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_full_warn = maxf(0.0, _full_warn - delta)
 	if Input.is_action_just_pressed("menu"):
 		_return_to_menu()
 		return
-	if state == "dead":
+	if state == "dead" or state == "ended":
 		if Input.is_action_just_pressed("restart"):
 			_start_run()
+		return
+	if state == "extracting":
 		return
 	if player == null or player.dead:
 		return
 
-	for coin in get_tree().get_nodes_in_group("coins"):
-		if coin.global_position.distance_to(player.global_position) < 26.0:
-			coin.remove_from_group("coins")
-			coins += 1
-			Meta.add_gold(1)
-			hud.set_coins(coins)
-			coin.queue_free()
+	if Input.is_action_just_pressed("bag") and (state == "playing" or state == "cleared"):
+		_toggle_bag()
+		return
+	if bag_open:
+		# 背包开着时玩家不能动，但倒计时继续走。
+		_tick_timer(delta)
+		return
 
-	if Input.is_action_just_pressed("interact") and dungeon.can_open_chest(player.global_position):
-		dungeon.open_chest()
-		player.heal(2)
-		hud.message("+2 HP", 1.0)
-		for i in 3:
-			_spawn_coin(dungeon.chest_position() + Vector2(randf_range(-12.0, 12.0), 0.0))
+	if state == "playing" or state == "cleared":
+		_tick_timer(delta)
+		if state == "dead":
+			return
+
+	for loot in get_tree().get_nodes_in_group("loot"):
+		if loot.global_position.distance_to(player.global_position) < 26.0:
+			var item: Dictionary = loot.get_meta("item", {})
+			if item.is_empty():
+				continue
+			if not _collect_item(item):
+				if _full_warn <= 0.0:
+					hud.message(Loc.t("bag_full"), 1.4)
+					_full_warn = 1.6
+				continue
+			loot.remove_from_group("loot")
+			loot.queue_free()
+
+	var can_search := dungeon.can_search(player.global_position)
+	if can_search and Input.is_action_just_pressed("interact"):
+		_search()
 
 	if state == "cleared" and dungeon.at_door(player.global_position):
-		_next_room()
+		_extract()
+		return
+
+	if state == "extracting":
+		_set_hint(Loc.t("hint_extracting"))
+	elif state == "cleared":
+		_set_hint(Loc.t("hint_exit"))
+	elif can_search:
+		_set_hint(Loc.t("hint_search"))
+	else:
+		_set_hint(Loc.t("hint_play"))
+
+
+func _tick_timer(delta: float) -> void:
+	time_left = maxf(0.0, time_left - delta)
+	hud.set_timer(time_left)
+	if time_left <= 0.0:
+		_fail(Loc.t("reason_timeup"))
 
 
 func _start_run() -> void:
-	depth = 1
-	coins = 0
+	raid = Meta.raids + 1
+	loot_value = 0
+	loot_count = 0
+	bag.clear()
+	bag_open = false
+	time_left = RUN_TIME
 	state = "playing"
-	hud.set_coins(coins)
-	hud.hide_death()
+	player.control_enabled = true
+	hud.close_bag()
+	hud.hide_end()
+	hud.set_loot(loot_count, loot_value)
+	hud.set_bag(0, BAG_SIZE)
+	hud.set_timer(time_left)
+	hud.set_coins(Meta.gold)
 	hud.fade_to(0.0, 0.45)
 	_build_room()
 
 
 func _build_room() -> void:
 	_clear_actors()
-	dungeon.generate(randi(), depth)
+	dungeon.generate(randi(), raid)
 	player.reset(dungeon.spawn_point())
 	_update_camera_limits()
 	_spawn_enemies()
 	state = "playing"
-	hud.set_depth(depth)
+	hud.set_raid(raid)
 	hud.set_enemies(enemies_alive)
-	hud.message("CLEAR THE ROOM", 1.6)
+	hud.message(Loc.t("msg_start"), 2.0)
+	_set_hint(Loc.t("hint_play"))
 
 
 func _clear_actors() -> void:
@@ -102,21 +188,21 @@ func _update_camera_limits() -> void:
 
 
 func _spawn_enemies() -> void:
-	var count: int = mini(4 + depth, 10)
+	var count: int = mini(4 + raid, 10)
 	enemies_alive = count
 	var pool: Array[String] = ["goblin", "goblin", "skelet"]
-	if depth >= 2:
+	if raid >= 2:
 		pool.append_array(["skelet", "chort"])
-	if depth >= 3:
+	if raid >= 3:
 		pool.append("chort")
-	if depth % 4 == 0:
+	if raid % 3 == 0:
 		pool.append("ogre")
 
 	for i in count:
 		var kind: String = pool.pick_random()
 		var enemy := ENEMY_SCENE.instantiate() as Enemy
 		enemy.kind = kind
-		enemy.tier = depth
+		enemy.tier = raid
 		enemy.player = player
 		actors.add_child(enemy)
 		# 前两只保证在视野附近，剩下的散落在房间各处。
@@ -128,7 +214,11 @@ func _spawn_enemies() -> void:
 func _on_enemy_died(enemy: Node) -> void:
 	enemies_alive -= 1
 	hud.set_enemies(enemies_alive)
-	_spawn_coin(enemy.global_position)
+	var roll := randf()
+	if roll < 0.55:
+		_spawn_item(enemy.global_position, _roll_valuable())
+	elif roll < 0.84:
+		_spawn_item(enemy.global_position, _roll_gear())
 	if enemies_alive <= 0 and state == "playing":
 		_room_cleared()
 
@@ -136,30 +226,252 @@ func _on_enemy_died(enemy: Node) -> void:
 func _room_cleared() -> void:
 	state = "cleared"
 	dungeon.open_door()
-	hud.message("ROOM CLEARED - FIND THE DOOR", 2.6)
+	hud.message(Loc.t("msg_clear"), 2.6)
 
 
-func _next_room() -> void:
-	state = "transition"
-	hud.fade_to(1.0, 0.22)
-	await get_tree().create_timer(0.28).timeout
-	depth += 1
-	_build_room()
-	hud.fade_to(0.0, 0.3)
+# ---------------------------------------------------------------- 搜索 / 战利品
+
+func _search() -> void:
+	var result := dungeon.search(player.global_position)
+	if not bool(result.found):
+		return
+	var gold_gain := 0
+	var gear_gain := 0
+	var dropped := 0
+	var at: Vector2 = result.pos
+	for i in int(result.rolls):
+		var item := _roll_loot_item()
+		if item.kind == "valuable":
+			gold_gain += int(item.value)
+			_stow(item, at)
+		elif _stow(item, at):
+			gear_gain += 1
+		else:
+			dropped += 1
+	var parts: Array[String] = []
+	if gold_gain > 0:
+		parts.append("+%d G" % gold_gain)
+	if gear_gain > 0:
+		parts.append("+%d GEAR" % gear_gain)
+	if dropped > 0:
+		parts.append("%d ON FLOOR (BAG FULL)" % dropped)
+	if parts.is_empty():
+		parts.append("EMPTY")
+	hud.message("   ·   ".join(PackedStringArray(parts)), 1.4)
 
 
-func _spawn_coin(at: Vector2) -> void:
-	var coin := AnimatedSprite2D.new()
-	coin.sprite_frames = Game.simple_frames(COIN_FRAMES, 8.0, true)
-	coin.play("default")
-	coin.position = at + Vector2(0.0, -10.0)
-	coin.z_index = 5
-	coin.add_to_group("coins")
-	actors.add_child(coin)
-	var base_y := coin.position.y
-	var tween := coin.create_tween()
-	tween.tween_property(coin, "position:y", base_y - 7.0, 0.16)
-	tween.tween_property(coin, "position:y", base_y, 0.16)
+## 贵重品直接入账；装备优先放背包，放不下就掉在脚边。
+func _stow(item: Dictionary, at: Vector2) -> bool:
+	if item.kind == "valuable":
+		loot_value += int(item.value)
+		loot_count += 1
+		hud.set_loot(loot_count, loot_value)
+		hud.pulse_loot()
+		return true
+	if bag.size() < BAG_SIZE:
+		bag.append(item)
+		hud.set_bag(bag.size(), BAG_SIZE)
+		hud.pulse_loot()
+		return true
+	_spawn_item(at + Vector2(randf_range(-16.0, 16.0), 4.0), item)
+	return false
+
+
+func _collect_item(item: Dictionary) -> bool:
+	if item.kind == "valuable":
+		loot_value += int(item.value)
+		loot_count += 1
+		hud.set_loot(loot_count, loot_value)
+		hud.pulse_loot()
+		return true
+	if bag.size() >= BAG_SIZE:
+		return false
+	bag.append(item)
+	hud.set_bag(bag.size(), BAG_SIZE)
+	hud.pulse_loot()
+	return true
+
+
+func _spawn_item(at: Vector2, item: Dictionary) -> void:
+	var sprite := Sprite2D.new()
+	sprite.texture = Game.tex(str(item.tex))
+	sprite.position = at + Vector2(randf_range(-10.0, 10.0), -10.0)
+	sprite.z_index = 5
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	sprite.set_meta("item", item)
+	sprite.add_to_group("loot")
+	actors.add_child(sprite)
+	var base_y := sprite.position.y
+	var tween := sprite.create_tween().set_loops()
+	tween.tween_property(sprite, "position:y", base_y - 4.0, 0.45)
+	tween.tween_property(sprite, "position:y", base_y, 0.45)
+
+
+func _roll_loot_item() -> Dictionary:
+	if randf() < 0.58:
+		return _roll_valuable()
+	return _roll_gear()
+
+
+func _roll_valuable() -> Dictionary:
+	var total := 0
+	for entry in VALUE_TABLE:
+		total += int(entry.weight)
+	var roll := randi_range(1, total)
+	for entry in VALUE_TABLE:
+		roll -= int(entry.weight)
+		if roll <= 0:
+			return {
+				"kind": "valuable",
+				"id": str(entry.id),
+				"name": str(entry.id).to_upper(),
+				"value": int(entry.value),
+				"tex": str(entry.tex),
+			}
+	return {"kind": "valuable", "id": "coins", "name": "COINS", "value": 5, "tex": "coin_anim_f0"}
+
+
+func _roll_gear() -> Dictionary:
+	var weights: Array[int] = []
+	var total := 0
+	for entry in GEAR_TABLE:
+		var weight := int(entry.weight)
+		# 高阶装备随 RAID 提升出现率。
+		if Meta.gear_bonus(str(entry.kind), str(entry.id)) >= 2:
+			weight += (raid - 1) * 4
+		weights.append(weight)
+		total += weight
+	var roll := randi_range(1, total)
+	for i in GEAR_TABLE.size():
+		roll -= weights[i]
+		if roll <= 0:
+			return _make_gear_item(str(GEAR_TABLE[i].kind), str(GEAR_TABLE[i].id))
+	return _make_gear_item("weapon", "knight_sword")
+
+
+func _make_gear_item(kind: String, id: String) -> Dictionary:
+	var bonus := Meta.gear_bonus(kind, id)
+	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
+	return {
+		"kind": kind,
+		"id": id,
+		"name": Loc.gear_name(id),
+		"tex": Meta.gear_texture(kind, id),
+		"bonus": bonus,
+		"bonus_text": Loc.t("gear_desc") % [bonus, unit],
+	}
+
+
+# ---------------------------------------------------------------- 背包
+
+## 测试与事件用的入口：放得下就进背包。
+func add_gear_to_bag(kind: String, id: String) -> bool:
+	if bag.size() >= BAG_SIZE:
+		return false
+	bag.append(_make_gear_item(kind, id))
+	hud.set_bag(bag.size(), BAG_SIZE)
+	hud.pulse_loot()
+	return true
+
+
+func drop_bag_item(index: int) -> void:
+	if index < 0 or index >= bag.size():
+		return
+	var item := bag[index]
+	bag.remove_at(index)
+	hud.set_bag(bag.size(), BAG_SIZE)
+	hud.open_bag(bag)
+	hud.message(Loc.t("msg_dropped") % Loc.t("gear_" + str(item.id)), 1.0)
+
+
+func _toggle_bag() -> void:
+	bag_open = not bag_open
+	player.control_enabled = not bag_open
+	if bag_open:
+		hud.open_bag(bag)
+	else:
+		hud.close_bag()
+
+
+# ---------------------------------------------------------------- 撤离 / 失败
+
+func _extract() -> void:
+	if state != "cleared":
+		return
+	state = "extracting"
+	if bag_open:
+		bag_open = false
+		hud.close_bag()
+	player.control_enabled = false
+	_set_hint("")
+	var gained := loot_value
+	var gear: Array = bag.duplicate()
+	var stored := bag.size()
+	var punished := _penalties_enabled()
+	if punished:
+		Meta.finish_extraction(gained, gear)
+		bag.clear()
+		hud.set_bag(0, BAG_SIZE)
+		hud.set_loot(0, 0)
+	hud.set_coins(Meta.gold)
+	hud.fade_to(0.55, 0.25)
+	await get_tree().create_timer(0.35).timeout
+	if state != "extracting":
+		return
+	hud.message(Loc.t("msg_extracted") % gained, 2.0)
+	var tail := Loc.t("returning_camp") if punished else Loc.t("esc_camp")
+	hud.show_end(Loc.t("end_extracted"),
+		Loc.t("end_extracted_sub") % [gained, stored, tail],
+		Color("#8fd18a"))
+	hud.fade_to(0.0, 0.4)
+	state = "ended"
+	if auto_return and punished:
+		await get_tree().create_timer(2.0).timeout
+		if state == "ended":
+			get_tree().change_scene_to_file("res://scenes/hub.tscn")
+
+
+func _fail(reason: String) -> void:
+	if state == "dead" or state == "ended" or state == "extracting":
+		return
+	state = "dead"
+	if bag_open:
+		bag_open = false
+		hud.close_bag()
+	player.control_enabled = false
+	var lost := loot_value
+	var lost_gear := bag.size()
+	var punished := _penalties_enabled()
+	if punished:
+		Meta.lose_gear()
+		bag.clear()
+		hud.set_bag(0, BAG_SIZE)
+		Meta.record_result(Loc.t("result_lost") % [reason, lost, lost_gear])
+	hud.message("", 0.0)
+	hud.set_enemies(-1)
+	hud.set_timer(0.0)
+	_set_hint("")
+	var subtitle: String
+	if punished:
+		subtitle = Loc.t("end_lost_sub") % [lost, lost_gear, Loc.t("returning_camp")]
+	else:
+		subtitle = Loc.t("end_demo_sub") % [lost, lost_gear]
+	await get_tree().create_timer(0.6).timeout
+	if state != "dead":
+		return
+	hud.show_end(reason, subtitle, Color("#e0453c"))
+	if auto_return and punished:
+		await get_tree().create_timer(2.0).timeout
+		if state == "dead":
+			get_tree().change_scene_to_file("res://scenes/hub.tscn")
+
+
+func _penalties_enabled() -> bool:
+	var args := OS.get_cmdline_user_args()
+	for flag in ["--demo", "--shot", "--diag"]:
+		if flag in args:
+			return false
+	return true
 
 
 func _on_health_changed(hp: int, max_hp: int) -> void:
@@ -170,19 +482,26 @@ func _on_health_changed(hp: int, max_hp: int) -> void:
 
 
 func _on_player_died() -> void:
-	state = "dead"
-	Meta.save_data()
-	hud.message("", 0.0)
-	hud.set_enemies(-1)
-	await get_tree().create_timer(0.75).timeout
-	if state == "dead":
-		hud.show_death()
+	_fail(Loc.t("reason_died"))
 
 
 func _return_to_menu() -> void:
+	# 撤离前按 ESC 视为放弃：背包与装备全部丢失。
+	if _penalties_enabled() and (state == "playing" or state == "cleared" or state == "extracting"):
+		Meta.lose_gear()
+		Meta.record_result(Loc.t("result_abandoned"))
 	Meta.save_data()
-	get_tree().change_scene_to_file("res://scenes/menu.tscn")
+	get_tree().change_scene_to_file("res://scenes/hub.tscn")
 
+
+func _set_hint(text: String) -> void:
+	if text == _hint:
+		return
+	_hint = text
+	hud.set_hint(text)
+
+
+# ---------------------------------------------------------------- 截图 / 诊断
 
 func _capture_after_delay() -> void:
 	await get_tree().create_timer(1.0).timeout
@@ -197,6 +516,16 @@ func _demo_shots() -> void:
 	player.global_position = Vector2(96.0, 52.0)
 	await get_tree().create_timer(0.5).timeout
 	await _save_shot("shot_room.png")
+
+	# 背包面板：放几件装备进去再打开。
+	add_gear_to_bag("weapon", "katana")
+	add_gear_to_bag("armor", "chain")
+	add_gear_to_bag("weapon", "golden_sword")
+	_toggle_bag()
+	await get_tree().create_timer(0.3).timeout
+	await _save_shot("shot_bag.png")
+	_toggle_bag()
+	await get_tree().create_timer(0.2).timeout
 
 	player.global_position = dungeon.door_point() + Vector2(0, 44)
 	await get_tree().create_timer(0.5).timeout

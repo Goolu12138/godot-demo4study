@@ -12,13 +12,14 @@ config_version=5
 
 config/name="dungeon-demo"
 run/main_scene="res://scenes/menu.tscn"
-config/features=PackedStringArray("4.7", "Forward Plus")
+config/features=PackedStringArray("4.3", "Forward Plus")
 config/icon="res://icon.svg"
 
 [autoload]
 
 Game="*res://scripts/game.gd"
 Meta="*res://scripts/meta.gd"
+Loc="*res://scripts/loc.gd"
 
 [display]
 

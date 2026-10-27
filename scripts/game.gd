@@ -23,6 +23,7 @@ var _tileset: TileSet
 var _frames_cache: Dictionary = {}
 var _simple_cache: Dictionary = {}
 var _tex_cache: Dictionary = {}
+var _ui_font: Font
 
 
 func _ready() -> void:
@@ -57,6 +58,7 @@ func _setup_input() -> void:
 	_bind_keys("interact", [KEY_E])
 	_bind_keys("restart", [KEY_R])
 	_bind_keys("menu", [KEY_ESCAPE])
+	_bind_keys("bag", [KEY_TAB])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
 
 
@@ -162,3 +164,21 @@ func tex(texture_name: String) -> Texture2D:
 			push_error("找不到贴图：%s" % texture_name)
 			_tex_cache[texture_name] = null
 	return _tex_cache[texture_name]
+
+
+## 默认字体只有拉丁字形，中文靠系统字体回退。
+## FontVariation 保留原本的英文观感，缺字时再落到系统中文字体。
+func ui_font() -> Font:
+	if _ui_font != null:
+		return _ui_font
+	var system := SystemFont.new()
+	system.font_names = PackedStringArray([
+		"Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC",
+		"Source Han Sans SC", "PingFang SC", "sans-serif",
+	])
+	var fallbacks: Array[Font] = [system]
+	var variation := FontVariation.new()
+	variation.base_font = ThemeDB.fallback_font
+	variation.fallbacks = fallbacks
+	_ui_font = variation
+	return _ui_font
