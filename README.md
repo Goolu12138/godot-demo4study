@@ -10,6 +10,7 @@
 ![休息大厅](screenshots/hub.png)
 ![大厅商店](screenshots/hub_shop.png)
 ![大厅仓库](screenshots/hub_stash.png)
+![设置（中文）](screenshots/menu_settings_zh.png)
 
 ![房间](screenshots/shot_room.png)
 ![背包](screenshots/shot_bag.png)
@@ -17,9 +18,9 @@
 
 ## 操作
 
-**标题菜单**：点击角色格 → `ENTER REST HALL` → `QUIT`。
+**标题菜单**：点击角色格 → `ENTER REST HALL` → `SETTINGS` / `QUIT`。
 
-**休息大厅**：`DEPLOY` 出发、`STASH` 仓库、`SHOP` 商店、`LEAVE HALL` 回标题菜单；`Esc` 关闭面板 / 离开大厅。
+**休息大厅**：`DEPLOY` 出发、`STASH` 仓库、`SHOP` 商店、`SETTINGS` 设置、`LEAVE HALL` 回标题菜单；`Esc` 关闭面板 / 离开大厅。
 
 | 按键 | 动作 |
 | --- | --- |
@@ -115,11 +116,12 @@
 ## 目录结构
 
 ```
-project.godot          主场景（menu.tscn）、自动加载（Game / Meta）、输入与窗口设置
+project.godot          主场景（menu.tscn）、自动加载（Game / Meta / Loc）、输入与窗口设置
 scripts/
-  game.gd              自动加载：解析 tile_list、按需构建 TileSet / SpriteFrames / 贴图缓存、注册输入
-  meta.gd              自动加载：金币、永久升级、仓库装备、装备/属性、撤离战绩，读写 user://meta.cfg
-  menu.gd              标题菜单 / 休息大厅共用 UI：hub_mode 切换标题、按钮与背景，含角色格、仓库、商店
+  game.gd              自动加载：解析 tile_list、按需构建 TileSet / SpriteFrames / 贴图缓存、注册输入、中文字体回退
+  meta.gd              自动加载：金币、永久升级、仓库装备、装备/属性、撤离战绩、音量与语言，读写 user://meta.cfg
+  loc.gd               自动加载：en / zh 文案表，Loc.t("key")；--zh 只影响本次运行
+  menu.gd              标题菜单 / 休息大厅共用 UI：hub_mode 切换标题、按钮与背景，含角色格、仓库、商店、设置
   main.gd              搜打撤循环：建房、刷怪、计时、搜索、掉落、背包、清场、撤离/失败结算、回大厅
   dungeon.gd           房间生成：地板/墙体瓦片、碰撞、撤离门、宝箱与可搜索木箱、装饰
   player.gd            玩家：移动、挥砍判定、冲刺、无敌帧、相机抖动；读取升级与装备
@@ -148,6 +150,17 @@ screenshots/           运行截图（带 .gdignore，不参与导入）
 想加新怪物，只要在 `enemy.gd` 的 `TYPES` 里加一条（帧名和素材前缀一致即可，例如 `imp`、`masked_orc`、`wizard` 都能直接用）。
 想加新装备，在 `meta.gd` 的 `WEAPONS` / `ARMORS` 里加一条，`texture` 填 `frames/` 下的文件名即可。
 
+## 设置（SETTINGS）
+
+标题菜单和休息大厅都有 `SETTINGS`：
+
+- **音量 / VOLUME**：0–100%，实时作用到 Master 总线；素材包里没有音频，接上音效后立即生效；
+- **语言 / LANGUAGE**：`EN` / `中文`，点一下立即刷新整个界面（标题、大厅、商店、仓库、HUD、结算），并写进存档；
+- **按键绑定 / KEY BINDINGS**：目前只读展示当前按键，改键留到后续版本（按键都集中在 `scripts/game.gd` 的 `_setup_input()`，接改键时只需要改这里 + 存盘）。
+
+设置保存在 `user://meta.cfg` 的 `[settings]` 段（`volume` / `language`）。
+中文界面走系统字体回退（微软雅黑 / Noto Sans CJK / 苹方），英文仍用 Godot 默认字体，不需要额外字体文件。
+
 ## 玩法数值
 
 - 单局限时 **150 秒**，超时视为死亡；
@@ -173,10 +186,13 @@ godot --headless --path . res://tests/smoke_test.tscn
 # 标题 / 大厅 / 仓库 / 商店 / 装备测试（会临时改存档，结束后自动还原）
 godot --headless --path . res://tests/menu_test.tscn
 
-# 生成标题菜单截图（menu.png）
+# 生成标题菜单截图（menu.png / menu_settings.png）
 godot --path . --resolution 1280x720 -- --menu-shot
 
-# 生成休息大厅截图（hub.png / hub_shop.png / hub_stash.png）
+# 生成中文截图（menu_zh.png / menu_settings_zh.png；--zh 只在本次运行生效，不写存档）
+godot --path . --resolution 1280x720 -- --menu-shot --zh
+
+# 生成休息大厅截图（hub.png / hub_shop.png / hub_stash.png / hub_settings.png）
 godot --path . --resolution 1280x720 res://scenes/hub.tscn -- --hub-shot
 
 # 生成游戏内截图（主场景是标题菜单，需要显式指定场景）
@@ -201,6 +217,7 @@ godot --path . -- --start
 ## 已知限制 / 下一步
 
 - 角色选取目前只有骑士可选，其他三个是占位；
+- 按键绑定只读，还不能改键；音量作用在 Master 总线，但素材包没有音频，所以暂时听不到声音；
 - 休息大厅目前是 UI 场景（仓库 / 商店 / 出发按钮），没有可行走的角色和互动点位；
 - 装备只有“武器 + 护甲”两条数值线，没有耐久、词条、稀有度；
 - 背包只装装备、只有 6 格，没有重量 / 堆叠 / 仓库容量上限；

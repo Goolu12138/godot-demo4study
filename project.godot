@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 Game="*res://scripts/game.gd"
 Meta="*res://scripts/meta.gd"
+Loc="*res://scripts/loc.gd"
 
 [display]
 

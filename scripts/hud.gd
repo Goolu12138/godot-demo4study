@@ -32,12 +32,18 @@ var _bag_max := BAG_CAPACITY
 
 
 func _ready() -> void:
+	var ui_theme := Theme.new()
+	ui_theme.default_font = Game.ui_font()
+	($Root as Control).theme = ui_theme
 	coin_icon.texture = Game.tex("coin_anim_f0")
 	fade_rect.color.a = 1.0
 	death.visible = false
 	bag_panel.visible = false
-	depth_label.text = "RAID 1"
+	depth_label.text = Loc.t("raid") % 1
 	enemies_label.text = ""
+	hint_label.text = Loc.t("hint_play")
+	($Root/Bag/Panel/Box/Title as Label).text = Loc.t("backpack")
+	($Root/Bag/Panel/Box/Hint as Label).text = Loc.t("bag_hint")
 	_style_bag_panel()
 	set_loot(0, 0)
 	set_bag(0, BAG_CAPACITY)
@@ -96,8 +102,7 @@ func set_bag(count: int, capacity: int) -> void:
 
 
 func _refresh_status() -> void:
-	loot_label.text = "LOOT %d   ·   %d G        BAG %d/%d" % [
-		_loot_count, _loot_value, _bag_count, _bag_max]
+	loot_label.text = Loc.t("loot") % [_loot_count, _loot_value, _bag_count, _bag_max]
 
 
 func pulse_loot() -> void:
@@ -114,16 +119,16 @@ func set_timer(seconds: float) -> void:
 
 
 func set_raid(level: int) -> void:
-	depth_label.text = "RAID %d" % level
+	depth_label.text = Loc.t("raid") % level
 
 
 func set_enemies(count: int) -> void:
 	if count < 0:
 		enemies_label.text = ""
 	elif count == 0:
-		enemies_label.text = "CLEAR"
+		enemies_label.text = Loc.t("clear_hud")
 	else:
-		enemies_label.text = "ENEMIES %d" % count
+		enemies_label.text = Loc.t("enemies") % count
 
 
 func set_hint(text: String) -> void:
@@ -179,7 +184,7 @@ func _make_bag_slot(index: int, item: Dictionary) -> Button:
 	button.focus_mode = Control.FOCUS_NONE
 	button.add_theme_font_size_override("font_size", 8)
 	if item.is_empty():
-		button.text = "EMPTY"
+		button.text = Loc.t("empty")
 		button.disabled = true
 		button.add_theme_color_override("font_disabled_color", Color(0.4, 0.36, 0.42, 1))
 		return button
@@ -242,7 +247,7 @@ func hide_end() -> void:
 
 
 func show_death() -> void:
-	show_end("YOU DIED", "R RETRY      ESC MENU", Color("#e0453c"))
+	show_end(Loc.t("death_title"), Loc.t("death_sub"), Color("#e0453c"))
 
 
 func hide_death() -> void:

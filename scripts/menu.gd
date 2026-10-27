@@ -5,13 +5,13 @@ extends Control
 const DUNGEON_SCENE := preload("res://scenes/dungeon.tscn")
 
 const HEROES := [
-	{"id": "knight_m", "name": "KNIGHT", "hp": 6, "speed": 92, "damage": 1, "unlocked": true,
+	{"id": "knight_m", "key": "knight", "name": "KNIGHT", "hp": 6, "speed": 92, "damage": 1, "unlocked": true,
 		"blurb": "BALANCED SWORD FIGHTER"},
-	{"id": "elf_f", "name": "ELF", "hp": 5, "speed": 104, "damage": 1, "unlocked": false,
+	{"id": "elf_f", "key": "elf", "name": "ELF", "hp": 5, "speed": 104, "damage": 1, "unlocked": false,
 		"blurb": "FAST AND FRAGILE"},
-	{"id": "dwarf_m", "name": "DWARF", "hp": 8, "speed": 82, "damage": 1, "unlocked": false,
+	{"id": "dwarf_m", "key": "dwarf", "name": "DWARF", "hp": 8, "speed": 82, "damage": 1, "unlocked": false,
 		"blurb": "TOUGH BUT SLOW"},
-	{"id": "wizzard_m", "name": "WIZARD", "hp": 4, "speed": 90, "damage": 2, "unlocked": false,
+	{"id": "wizzard_m", "key": "wizard", "name": "WIZARD", "hp": 4, "speed": 90, "damage": 2, "unlocked": false,
 		"blurb": "GLASS CANNON"},
 ]
 
@@ -37,6 +37,9 @@ var _shop_box: VBoxContainer
 var _stash_panel: Control
 var _stash_box: VBoxContainer
 var _stash_loadout: Label
+var _settings_panel: Control
+var _settings_box: VBoxContainer
+var _volume_slider: HSlider
 var _result_label: Label
 var _flash_tween: Tween
 
@@ -55,6 +58,7 @@ func _ready() -> void:
 	_build_footer()
 	_build_shop()
 	_build_stash()
+	_build_settings()
 	_refresh_all()
 	_show_last_result()
 	if not hub_mode and "--menu-shot" in OS.get_cmdline_user_args():
@@ -69,7 +73,10 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("ui_cancel"):
 		return
-	if _shop_panel != null and _shop_panel.visible:
+	if _settings_panel != null and _settings_panel.visible:
+		_close_settings()
+		get_viewport().set_input_as_handled()
+	elif _shop_panel != null and _shop_panel.visible:
 		_close_shop()
 		get_viewport().set_input_as_handled()
 	elif _stash_panel != null and _stash_panel.visible:
@@ -117,6 +124,7 @@ func _build_theme() -> Theme:
 	result.set_font_size("font_size", "Button", 16)
 	result.set_stylebox("panel", "PanelContainer", _panel_style())
 	result.set_color("font_color", "Label", CREAM)
+	result.default_font = Game.ui_font()
 	return result
 
 
@@ -127,8 +135,8 @@ func _button_style(background: Color, border: Color) -> StyleBoxFlat:
 	style.set_border_width_all(2)
 	style.content_margin_left = 14.0
 	style.content_margin_right = 14.0
-	style.content_margin_top = 8.0
-	style.content_margin_bottom = 8.0
+	style.content_margin_top = 5.0
+	style.content_margin_bottom = 5.0
 	return style
 
 
@@ -147,14 +155,14 @@ func _panel_style() -> StyleBoxFlat:
 # ---------------------------------------------------------------- 标题
 
 func _build_title() -> void:
-	var heading := "REST HALL" if hub_mode else "DUNGEON EXTRACTION"
+	var heading := Loc.t("hub_title") if hub_mode else Loc.t("menu_title")
 	var title := _label(heading, 34, GOLD, 8)
 	title.position = Vector2(0, 18)
 	title.size = Vector2(640, 54)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(title)
 
-	var caption := "REST  ·  STASH  ·  SHOP  ·  DEPLOY" if hub_mode else "SEARCH  ·  FIGHT  ·  EXTRACT"
+	var caption := Loc.t("hub_sub") if hub_mode else Loc.t("menu_sub")
 	var subtitle := _label(caption, 9, MUTED, 3)
 	subtitle.position = Vector2(0, 72)
 	subtitle.size = Vector2(640, 16)
@@ -180,7 +188,7 @@ func _build_hero_panel() -> void:
 	box.add_theme_constant_override("separation", 6)
 	panel.add_child(box)
 
-	var header := _label("YOUR HERO" if hub_mode else "CHOOSE HERO", 12, GOLD, 4)
+	var header := _label(Loc.t("your_hero") if hub_mode else Loc.t("choose_hero"), 12, GOLD, 4)
 	box.add_child(header)
 
 	var grid := GridContainer.new()
@@ -221,7 +229,7 @@ func _make_hero_slot(index: int, hero: Dictionary) -> Button:
 		portrait.modulate = Color(0.16, 0.13, 0.19, 1.0)
 	button.add_child(portrait)
 
-	var label := _label(str(hero.name) if hero.unlocked else "LOCKED", 8,
+	var label := _label(Loc.t("hero_" + str(hero.key)) if hero.unlocked else Loc.t("locked"), 8,
 		CREAM if hero.unlocked else MUTED, 3)
 	label.position = Vector2(0, 42)
 	label.size = Vector2(120, 12)
@@ -234,7 +242,7 @@ func _make_hero_slot(index: int, hero: Dictionary) -> Button:
 
 func _on_hero_pressed(index: int) -> void:
 	if not bool(HEROES[index].unlocked):
-		_flash("LOCKED  ·  MORE HEROES COMING LATER")
+		_flash(Loc.t("locked_msg"))
 		return
 	selected_hero = index
 	_refresh_heroes()
@@ -244,43 +252,53 @@ func _refresh_heroes() -> void:
 	for i in _hero_slots.size():
 		_hero_slots[i].button_pressed = i == selected_hero
 	var hero: Dictionary = HEROES[selected_hero]
-	var hp_bonus := Meta.upgrade_level("vitality") * 2
+	var hp_bonus := Meta.upgrade_level("vitality") * 2 + Meta.armor_bonus()
 	var speed_bonus := int(round(hero.speed * 0.08 * Meta.upgrade_level("swiftness")))
-	var damage_bonus := Meta.upgrade_level("might")
-	_hero_info.text = "%s  ·  HP %d  ·  SPEED %d  ·  DMG %d\n%s" % [
-		hero.name, int(hero.hp) + hp_bonus, int(hero.speed) + speed_bonus, int(hero.damage) + damage_bonus, hero.blurb]
+	var damage_bonus := Meta.upgrade_level("might") + Meta.weapon_bonus()
+	_hero_info.text = Loc.t("stats") % [
+		Loc.t("hero_" + str(hero.key)), int(hero.hp) + hp_bonus,
+		int(hero.speed) + speed_bonus, int(hero.damage) + damage_bonus,
+		Loc.t("blurb_" + str(hero.key))]
 
 
 # ---------------------------------------------------------------- 主按钮
 
 func _build_main_buttons() -> void:
 	_main_box = VBoxContainer.new()
-	_main_box.position = Vector2(356, 112)
-	_main_box.add_theme_constant_override("separation", 8)
+	_main_box.position = Vector2(356, 94 if hub_mode else 112)
+	_main_box.add_theme_constant_override("separation", 5)
 	add_child(_main_box)
 
 	if hub_mode:
-		var deploy := _menu_button("DEPLOY")
+		var deploy := _menu_button(Loc.t("deploy"))
 		deploy.pressed.connect(_start_game)
 		_main_box.add_child(deploy)
 
-		var stash := _menu_button("STASH")
+		var stash := _menu_button(Loc.t("stash"))
 		stash.pressed.connect(_open_stash)
 		_main_box.add_child(stash)
 
-		var shop := _menu_button("SHOP")
+		var shop := _menu_button(Loc.t("shop"))
 		shop.pressed.connect(_open_shop)
 		_main_box.add_child(shop)
 
-		var leave := _menu_button("LEAVE HALL")
+		var settings := _menu_button(Loc.t("settings"))
+		settings.pressed.connect(_open_settings)
+		_main_box.add_child(settings)
+
+		var leave := _menu_button(Loc.t("leave_hall"))
 		leave.pressed.connect(_leave_hall)
 		_main_box.add_child(leave)
 	else:
-		var enter := _menu_button("ENTER REST HALL")
+		var enter := _menu_button(Loc.t("enter_hall"))
 		enter.pressed.connect(_start_game)
 		_main_box.add_child(enter)
 
-		var quit := _menu_button("QUIT")
+		var settings := _menu_button(Loc.t("settings"))
+		settings.pressed.connect(_open_settings)
+		_main_box.add_child(settings)
+
+		var quit := _menu_button(Loc.t("quit"))
 		quit.pressed.connect(_quit_game)
 		_main_box.add_child(quit)
 
@@ -288,21 +306,21 @@ func _build_main_buttons() -> void:
 func _menu_button(text: String) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(248, 40)
+	button.custom_minimum_size = Vector2(248, 34)
 	button.focus_mode = Control.FOCUS_NONE
 	return button
 
 
 func _build_loadout() -> void:
 	_loadout = _label("", 9, MUTED, 2)
-	_loadout.position = Vector2(356, 300 if hub_mode else 222)
+	_loadout.position = Vector2(356, 306 if hub_mode else 246)
 	_loadout.size = Vector2(252, 38)
 	_loadout.autowrap_mode = TextServer.AUTOWRAP_WORD
 	add_child(_loadout)
 
 
 func _build_footer() -> void:
-	var footer := _label("GODOT 4  ·  ART BY 0x72  ·  CLICK TO SELECT", 8, Color(0.55, 0.5, 0.55), 2)
+	var footer := _label(Loc.t("footer"), 8, Color(0.55, 0.5, 0.55), 2)
 	footer.position = Vector2(0, 342)
 	footer.size = Vector2(640, 14)
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -336,7 +354,7 @@ func _build_shop() -> void:
 	var header := HBoxContainer.new()
 	box.add_child(header)
 
-	var title := _label("SHOP", 18, GOLD, 5)
+	var title := _label(Loc.t("shop_title"), 18, GOLD, 5)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 
@@ -359,7 +377,7 @@ func _build_shop() -> void:
 	scroll.add_child(_shop_box)
 
 	var close := Button.new()
-	close.text = "CLOSE"
+	close.text = Loc.t("close")
 	close.custom_minimum_size = Vector2(0, 34)
 	close.focus_mode = Control.FOCUS_NONE
 	close.pressed.connect(_close_shop)
@@ -367,20 +385,20 @@ func _build_shop() -> void:
 
 
 func _refresh_shop() -> void:
-	_shop_gold.text = "GOLD %d" % Meta.gold
+	_shop_gold.text = Loc.t("gold") % Meta.gold
 	for child in _shop_box.get_children():
 		_shop_box.remove_child(child)
 		child.queue_free()
 
-	_add_section("UPGRADES")
+	_add_section(Loc.t("upgrades"))
 	for key in Meta.UPGRADES:
 		_add_upgrade_row(key)
 
-	_add_section("WEAPON")
+	_add_section(Loc.t("weapons"))
 	for id in Meta.WEAPONS:
 		_add_gear_row("weapon", str(id), Meta.WEAPONS[id])
 
-	_add_section("ARMOR")
+	_add_section(Loc.t("armors"))
 	for id in Meta.ARMORS:
 		_add_gear_row("armor", str(id), Meta.ARMORS[id])
 
@@ -404,13 +422,13 @@ func _add_upgrade_row(key: String) -> void:
 	texts.add_theme_constant_override("separation", 0)
 	row.add_child(texts)
 
-	texts.add_child(_label("%s   %d/%d" % [definition.title, level, definition.max], 10, CREAM, 2))
-	texts.add_child(_label(definition.desc, 8, MUTED, 1))
+	texts.add_child(_label("%s   %d/%d" % [Loc.t("up_" + key + "_title"), level, int(definition.max)], 10, CREAM, 2))
+	texts.add_child(_label(Loc.t("up_" + key + "_desc"), 8, MUTED, 1))
 
 	var buy := Button.new()
 	buy.custom_minimum_size = Vector2(88, 30)
 	buy.focus_mode = Control.FOCUS_NONE
-	buy.text = "MAX" if cost < 0 else "%d G" % cost
+	buy.text = Loc.t("max") if cost < 0 else "%d G" % cost
 	buy.disabled = cost < 0 or Meta.gold < cost
 	buy.pressed.connect(_buy_upgrade.bind(key))
 	row.add_child(buy)
@@ -435,8 +453,9 @@ func _add_gear_row(kind: String, id: String, definition: Dictionary) -> void:
 	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	texts.add_theme_constant_override("separation", 0)
 	row.add_child(texts)
-	texts.add_child(_label(str(definition.title), 9, CREAM, 2))
-	texts.add_child(_label(str(definition.desc), 7, MUTED, 1))
+	texts.add_child(_label(Loc.gear_name(id), 9, CREAM, 2))
+	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
+	texts.add_child(_label(Loc.t("gear_desc") % [int(definition.bonus), unit], 7, MUTED, 1))
 
 	var equipped: String = Meta.weapon if kind == "weapon" else Meta.armor
 	var cost := int(definition.cost)
@@ -446,13 +465,13 @@ func _add_gear_row(kind: String, id: String, definition: Dictionary) -> void:
 	buy.custom_minimum_size = Vector2(84, 26)
 	buy.focus_mode = Control.FOCUS_NONE
 	if id == equipped:
-		buy.text = "EQUIPPED"
+		buy.text = Loc.t("equipped")
 		buy.disabled = true
 	elif cost <= 0:
-		buy.text = "DEFAULT"
+		buy.text = Loc.t("default_gear")
 		buy.disabled = true
 	elif owned > 0:
-		buy.text = "OWNED x%d" % owned
+		buy.text = Loc.t("owned") % owned
 		buy.disabled = true
 	else:
 		buy.text = "%d G" % cost
@@ -463,18 +482,17 @@ func _add_gear_row(kind: String, id: String, definition: Dictionary) -> void:
 
 func _buy_upgrade(key: String) -> void:
 	if Meta.buy(key):
-		_flash("PURCHASED  ·  %s" % Meta.UPGRADES[key].title, Color("#8fd18a"))
+		_flash(Loc.t("purchased") % Loc.t("up_" + key + "_title"), Color("#8fd18a"))
 	_refresh_shop()
 	_refresh_heroes()
 	_refresh_loadout()
 
 
 func _buy_gear(kind: String, id: String) -> void:
-	var table: Dictionary = Meta.WEAPONS if kind == "weapon" else Meta.ARMORS
 	if Meta.buy_gear(kind, id):
-		_flash("STORED  ·  %s" % str(table[id].title), Color("#8fd18a"))
+		_flash(Loc.t("stored") % Loc.gear_name(id), Color("#8fd18a"))
 	else:
-		_flash("NOT ENOUGH GOLD")
+		_flash(Loc.t("not_enough"))
 	_refresh_shop()
 	_refresh_stash()
 	_refresh_heroes()
@@ -483,6 +501,8 @@ func _buy_gear(kind: String, id: String) -> void:
 
 func _open_shop() -> void:
 	_close_stash()
+	if _settings_panel != null:
+		_settings_panel.visible = false
 	_shop_panel.visible = true
 	_refresh_shop()
 
@@ -518,7 +538,7 @@ func _build_stash() -> void:
 	var header := HBoxContainer.new()
 	box.add_child(header)
 
-	var title := _label("STASH", 18, GOLD, 5)
+	var title := _label(Loc.t("stash_title"), 18, GOLD, 5)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 
@@ -541,7 +561,7 @@ func _build_stash() -> void:
 	scroll.add_child(_stash_box)
 
 	var close := Button.new()
-	close.text = "CLOSE"
+	close.text = Loc.t("close")
 	close.custom_minimum_size = Vector2(0, 34)
 	close.focus_mode = Control.FOCUS_NONE
 	close.pressed.connect(_close_stash)
@@ -551,13 +571,13 @@ func _build_stash() -> void:
 func _refresh_stash() -> void:
 	if _stash_panel == null:
 		return
-	_stash_loadout.text = "%s  ·  %s" % [Meta.gear_title("weapon", Meta.weapon), Meta.gear_title("armor", Meta.armor)]
+	_stash_loadout.text = "%s  ·  %s" % [Loc.gear_name(Meta.weapon), Loc.gear_name(Meta.armor)]
 	for child in _stash_box.get_children():
 		_stash_box.remove_child(child)
 		child.queue_free()
 
-	_add_stash_section("WEAPONS", "weapon")
-	_add_stash_section("ARMORS", "armor")
+	_add_stash_section(Loc.t("weapons"), "weapon")
+	_add_stash_section(Loc.t("armors"), "armor")
 
 
 func _add_stash_section(title: String, kind: String) -> void:
@@ -591,29 +611,29 @@ func _add_stash_row(kind: String, id: String, looted: int) -> void:
 	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	texts.add_theme_constant_override("separation", 0)
 	row.add_child(texts)
-	var unit := "DMG" if kind == "weapon" else "HP"
+	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
 	var count := Meta.owned_count(kind, id)
 	var suffix := "" if count <= 1 else "   x%d" % count
-	texts.add_child(_label("%s%s" % [Meta.gear_title(kind, id), suffix], 9, CREAM, 2))
-	texts.add_child(_label("+%d %s%s" % [Meta.gear_bonus(kind, id), unit,
-		"   ·   LOOTED" if looted > 0 else "   ·   DEFAULT"], 7, MUTED, 1))
+	texts.add_child(_label("%s%s" % [Loc.gear_name(id), suffix], 9, CREAM, 2))
+	var tag := "   ·   " + (Loc.t("looted") if looted > 0 else Loc.t("default_gear"))
+	texts.add_child(_label(Loc.t("gear_desc") % [Meta.gear_bonus(kind, id), unit] + tag, 7, MUTED, 1))
 
 	var equipped: String = Meta.weapon if kind == "weapon" else Meta.armor
 	var button := Button.new()
 	button.custom_minimum_size = Vector2(84, 26)
 	button.focus_mode = Control.FOCUS_NONE
 	if id == equipped:
-		button.text = "EQUIPPED"
+		button.text = Loc.t("equipped")
 		button.disabled = true
 	else:
-		button.text = "EQUIP"
+		button.text = Loc.t("equip")
 		button.pressed.connect(_equip_gear.bind(kind, id))
 	row.add_child(button)
 
 
 func _equip_gear(kind: String, id: String) -> void:
 	if Meta.equip_gear(kind, id):
-		_flash("EQUIPPED  ·  %s" % Meta.gear_title(kind, id), Color("#8fd18a"))
+		_flash(Loc.t("equipped_msg") % Loc.gear_name(id), Color("#8fd18a"))
 	_refresh_stash()
 	_refresh_shop()
 	_refresh_heroes()
@@ -622,6 +642,8 @@ func _equip_gear(kind: String, id: String) -> void:
 
 func _open_stash() -> void:
 	_close_shop()
+	if _settings_panel != null:
+		_settings_panel.visible = false
 	_stash_panel.visible = true
 	_refresh_stash()
 
@@ -629,6 +651,141 @@ func _open_stash() -> void:
 func _close_stash() -> void:
 	if _stash_panel != null:
 		_stash_panel.visible = false
+
+
+# ---------------------------------------------------------------- 设置
+
+func _build_settings() -> void:
+	_settings_panel = Control.new()
+	_settings_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_settings_panel.visible = false
+	_settings_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_settings_panel)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.02, 0.01, 0.03, 0.82)
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	_settings_panel.add_child(shade)
+
+	var panel := PanelContainer.new()
+	panel.position = Vector2(115, 24)
+	panel.custom_minimum_size = Vector2(410, 0)
+	_settings_panel.add_child(panel)
+
+	_settings_box = VBoxContainer.new()
+	_settings_box.add_theme_constant_override("separation", 6)
+	panel.add_child(_settings_box)
+
+	_refresh_settings()
+
+
+func _refresh_settings() -> void:
+	for child in _settings_box.get_children():
+		_settings_box.remove_child(child)
+		child.queue_free()
+
+	_settings_box.add_child(_label(Loc.t("settings_title"), 18, GOLD, 5))
+
+	_settings_box.add_child(_label(Loc.t("volume"), 11, CREAM, 3))
+	var volume_row := HBoxContainer.new()
+	volume_row.add_theme_constant_override("separation", 10)
+	_settings_box.add_child(volume_row)
+
+	var slider := HSlider.new()
+	slider.min_value = 0
+	slider.max_value = 100
+	slider.step = 1
+	slider.value = Meta.volume
+	slider.custom_minimum_size = Vector2(300, 18)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	volume_row.add_child(slider)
+	_volume_slider = slider
+
+	var value_label := _label("%d%%" % Meta.volume, 10, MUTED, 2)
+	value_label.custom_minimum_size = Vector2(44, 0)
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	volume_row.add_child(value_label)
+
+	slider.value_changed.connect(_on_volume_changed.bind(value_label))
+	slider.drag_ended.connect(func(_changed: bool) -> void: Meta.save_data())
+
+	var language_row := HBoxContainer.new()
+	language_row.add_theme_constant_override("separation", 8)
+	_settings_box.add_child(language_row)
+	language_row.add_child(_label(Loc.t("language"), 11, CREAM, 3))
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	language_row.add_child(spacer)
+
+	var group := ButtonGroup.new()
+	for code in ["en", "zh"]:
+		var button := Button.new()
+		button.text = Loc.t("lang_" + code)
+		button.toggle_mode = true
+		button.button_group = group
+		button.button_pressed = Loc.language == code
+		button.focus_mode = Control.FOCUS_NONE
+		button.custom_minimum_size = Vector2(72, 28)
+		button.pressed.connect(_on_language_pressed.bind(code))
+		language_row.add_child(button)
+
+	var separator := HSeparator.new()
+	separator.add_theme_constant_override("separation", 4)
+	_settings_box.add_child(separator)
+
+	_settings_box.add_child(_label(Loc.t("keybindings"), 11, GOLD, 3))
+	_settings_box.add_child(_label(Loc.t("coming_soon"), 8, MUTED, 1))
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 2)
+	_settings_box.add_child(grid)
+	for pair in [["key_move", "key_move_keys"], ["key_attack", "key_attack_keys"],
+			["key_dash", "key_dash_keys"], ["key_search", "key_search_keys"],
+			["key_bag", "key_bag_keys"], ["key_menu", "key_menu_keys"]]:
+		grid.add_child(_label(Loc.t(str(pair[0])), 9, CREAM, 2))
+		var keys := _label(Loc.t(str(pair[1])), 9, MUTED, 1)
+		keys.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		keys.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		grid.add_child(keys)
+
+	var close := Button.new()
+	close.text = Loc.t("close")
+	close.custom_minimum_size = Vector2(0, 32)
+	close.focus_mode = Control.FOCUS_NONE
+	close.pressed.connect(_close_settings)
+	_settings_box.add_child(close)
+
+
+func _on_volume_changed(value: float, label: Label) -> void:
+	Meta.volume = int(round(value))
+	Meta.apply_audio()
+	label.text = "%d%%" % Meta.volume
+
+
+func _on_language_pressed(code: String) -> void:
+	if code == Loc.language:
+		return
+	Loc.set_language(code)
+	get_tree().reload_current_scene()
+
+
+func _open_settings() -> void:
+	_close_shop()
+	_close_stash()
+	_settings_panel.visible = true
+	_refresh_settings()
+
+
+func _close_settings() -> void:
+	if _settings_panel == null:
+		return
+	Meta.apply_audio()
+	Meta.save_data()
+	_settings_panel.visible = false
 
 
 # ---------------------------------------------------------------- 操作
@@ -660,8 +817,8 @@ func _refresh_all() -> void:
 
 
 func _refresh_loadout() -> void:
-	_loadout.text = "LOADOUT   %s   ·   %s\nRAIDS %d   ·   BEST HAUL %d G   ·   STASH %d" % [
-		Meta.gear_title("weapon", Meta.weapon), Meta.gear_title("armor", Meta.armor),
+	_loadout.text = Loc.t("loadout") % [
+		Loc.gear_name(Meta.weapon), Loc.gear_name(Meta.armor),
 		Meta.raids, Meta.best_haul, Meta.owned_weapons.size() + Meta.owned_armors.size()]
 
 
@@ -703,20 +860,29 @@ func _label(text: String, size: int, color: Color, outline := 0) -> Label:
 
 
 func _capture_menu() -> void:
+	var suffix := "_zh" if Loc.language == "zh" else ""
 	await get_tree().create_timer(0.4).timeout
-	await _save_shot("menu.png")
+	await _save_shot("menu%s.png" % suffix)
+	_open_settings()
+	await get_tree().create_timer(0.3).timeout
+	await _save_shot("menu_settings%s.png" % suffix)
+	_close_settings()
 	get_tree().quit()
 
 
 func _capture_hub() -> void:
+	var suffix := "_zh" if Loc.language == "zh" else ""
 	await get_tree().create_timer(0.4).timeout
-	await _save_shot("hub.png")
+	await _save_shot("hub%s.png" % suffix)
 	_open_shop()
 	await get_tree().create_timer(0.3).timeout
-	await _save_shot("hub_shop.png")
+	await _save_shot("hub_shop%s.png" % suffix)
 	_open_stash()
 	await get_tree().create_timer(0.3).timeout
-	await _save_shot("hub_stash.png")
+	await _save_shot("hub_stash%s.png" % suffix)
+	_open_settings()
+	await get_tree().create_timer(0.3).timeout
+	await _save_shot("hub_settings%s.png" % suffix)
 	get_tree().quit()
 
 

@@ -44,12 +44,16 @@ var owned_weapons: Array[String] = []
 var owned_armors: Array[String] = []
 ## 休息处顶部展示的上一局结果。
 var last_result := ""
+## 设置项：主音量 0-100，界面语言 en / zh。
+var volume := 80
+var language := "en"
 
 var _levels := {"vitality": 0, "swiftness": 0, "might": 0}
 
 
 func _ready() -> void:
 	load_data()
+	apply_audio()
 
 
 func load_data() -> void:
@@ -61,6 +65,8 @@ func load_data() -> void:
 	raids = 0
 	best_haul = 0
 	last_result = ""
+	volume = 80
+	language = "en"
 	owned_weapons = []
 	owned_armors = []
 	var config := ConfigFile.new()
@@ -75,6 +81,8 @@ func load_data() -> void:
 	raids = int(config.get_value("run", "raids", 0))
 	best_haul = int(config.get_value("run", "best_haul", 0))
 	last_result = str(config.get_value("run", "last_result", ""))
+	volume = int(config.get_value("settings", "volume", 80))
+	language = str(config.get_value("settings", "language", "en"))
 	for id in _string_array(config.get_value("stash", "weapons", [])):
 		if WEAPONS.has(id) and id != DEFAULT_WEAPON:
 			owned_weapons.append(id)
@@ -98,9 +106,18 @@ func save_data() -> void:
 	config.set_value("run", "raids", raids)
 	config.set_value("run", "best_haul", best_haul)
 	config.set_value("run", "last_result", last_result)
+	config.set_value("settings", "volume", volume)
+	config.set_value("settings", "language", language)
 	config.set_value("stash", "weapons", owned_weapons)
 	config.set_value("stash", "armors", owned_armors)
 	config.save(SAVE_PATH)
+
+
+## 把 volume 应用在 Master 总线上。现在还没有音频资源，接音效后自动生效。
+func apply_audio() -> void:
+	var linear := clampf(float(volume) / 100.0, 0.0, 1.0)
+	AudioServer.set_bus_mute(0, linear <= 0.001)
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(linear, 0.001)))
 
 
 func _string_array(value) -> Array[String]:
@@ -268,7 +285,7 @@ func finish_extraction(value: int, gear: Array) -> void:
 		elif kind == "armor" and ARMORS.has(id):
 			owned_armors.append(id)
 			stored += 1
-	last_result = "EXTRACTED   +%d G   ·   %d GEAR STORED" % [value, stored]
+	last_result = Loc.t("result_extracted") % [value, stored]
 	save_data()
 
 

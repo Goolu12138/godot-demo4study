@@ -8,6 +8,7 @@ var _saved := {}
 
 func _ready() -> void:
 	_snapshot()
+	Loc.language = "en"
 	Meta.gold = 500
 	Meta.selected_hero = "knight_m"
 	Meta.weapon = Meta.DEFAULT_WEAPON
@@ -24,7 +25,7 @@ func _ready() -> void:
 
 	check(menu._hero_slots.size() == 4, "四个角色格")
 	check(menu.hub_mode == false, "菜单处于标题模式")
-	check(menu._main_box.get_child_count() == 2, "标题有进入大厅 / 退出两个按钮")
+	check(menu._main_box.get_child_count() == 3, "标题有进入大厅 / 设置 / 退出三个按钮")
 	check(menu._hero_slots[0].button_pressed, "默认选中骑士")
 	check(menu._hero_slots[1].button_pressed == false, "锁定角色默认未选中")
 
@@ -76,12 +77,29 @@ func _ready() -> void:
 	menu._close_stash()
 	check(menu._stash_panel.visible == false, "关闭仓库面板")
 
+	# 设置：音量滑块 + 中英文词条
+	menu._open_settings()
+	check(menu._settings_panel.visible, "打开设置面板")
+	check(menu._volume_slider != null, "设置里有音量滑块")
+	menu._volume_slider.value = 35.0 if Meta.volume != 35 else 34.0
+	menu._volume_slider.value = 35.0
+	await get_tree().process_frame
+	check(Meta.volume == 35, "音量写入设置（%d）" % Meta.volume)
+	check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.35)) < 0.2, "音量作用到 Master 总线")
+	Loc.language = "zh"
+	check(Loc.t("settings_title") == "设置", "中文词条可用")
+	check(Loc.t("menu_title") == "地牢撤离", "中文标题可用")
+	Loc.language = "en"
+	check(Loc.t("settings_title") == "SETTINGS", "英文词条可用")
+	menu._close_settings()
+	check(menu._settings_panel.visible == false, "关闭设置面板")
+
 	# 休息大厅：独立场景，撤离 / 死亡后回到这里
 	var hub = load("res://scenes/hub.tscn").instantiate()
 	add_child(hub)
 	await get_tree().process_frame
 	check(hub.hub_mode, "休息大厅场景处于大厅模式")
-	check(hub._main_box.get_child_count() == 4, "大厅有出发 / 仓库 / 商店 / 离开四个按钮")
+	check(hub._main_box.get_child_count() == 5, "大厅有出击 / 仓库 / 商店 / 设置 / 离开五个按钮")
 	check(hub._loadout.text.contains("LOADOUT"), "大厅显示当前装备概况")
 	check(hub._stash_panel != null and hub._shop_panel != null, "大厅内置仓库与商店面板")
 	hub.queue_free()
@@ -116,6 +134,8 @@ func _snapshot() -> void:
 		"weapons": Meta.owned_weapons.duplicate(),
 		"armors": Meta.owned_armors.duplicate(),
 		"last_result": Meta.last_result,
+		"volume": Meta.volume,
+		"language": Meta.language,
 	}
 
 
@@ -130,6 +150,9 @@ func _restore() -> void:
 	Meta.owned_weapons = _saved.weapons
 	Meta.owned_armors = _saved.armors
 	Meta.last_result = str(_saved.last_result)
+	Meta.volume = int(_saved.volume)
+	Meta.language = str(_saved.language)
+	Meta.apply_audio()
 	Meta.save_data()
 
 

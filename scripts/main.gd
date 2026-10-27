@@ -106,7 +106,7 @@ func _process(delta: float) -> void:
 				continue
 			if not _collect_item(item):
 				if _full_warn <= 0.0:
-					hud.message("BAG FULL — TAB TO DROP SOMETHING", 1.4)
+					hud.message(Loc.t("bag_full"), 1.4)
 					_full_warn = 1.6
 				continue
 			loot.remove_from_group("loot")
@@ -121,20 +121,20 @@ func _process(delta: float) -> void:
 		return
 
 	if state == "extracting":
-		_set_hint("EXTRACTING…")
+		_set_hint(Loc.t("hint_extracting"))
 	elif state == "cleared":
-		_set_hint("EXIT OPEN — WALK INTO THE DOOR TO EXTRACT")
+		_set_hint(Loc.t("hint_exit"))
 	elif can_search:
-		_set_hint("E — SEARCH")
+		_set_hint(Loc.t("hint_search"))
 	else:
-		_set_hint("WASD MOVE   SPACE ATTACK   SHIFT DASH   E SEARCH   TAB BAG   ESC ABANDON")
+		_set_hint(Loc.t("hint_play"))
 
 
 func _tick_timer(delta: float) -> void:
 	time_left = maxf(0.0, time_left - delta)
 	hud.set_timer(time_left)
 	if time_left <= 0.0:
-		_fail("TIME UP")
+		_fail(Loc.t("reason_timeup"))
 
 
 func _start_run() -> void:
@@ -165,8 +165,8 @@ func _build_room() -> void:
 	state = "playing"
 	hud.set_raid(raid)
 	hud.set_enemies(enemies_alive)
-	hud.message("SEARCH · FIGHT · EXTRACT", 2.0)
-	_set_hint("WASD MOVE   SPACE ATTACK   SHIFT DASH   E SEARCH   TAB BAG   ESC ABANDON")
+	hud.message(Loc.t("msg_start"), 2.0)
+	_set_hint(Loc.t("hint_play"))
 
 
 func _clear_actors() -> void:
@@ -226,7 +226,7 @@ func _on_enemy_died(enemy: Node) -> void:
 func _room_cleared() -> void:
 	state = "cleared"
 	dungeon.open_door()
-	hud.message("AREA CLEAR — REACH THE EXIT", 2.6)
+	hud.message(Loc.t("msg_clear"), 2.6)
 
 
 # ---------------------------------------------------------------- 搜索 / 战利品
@@ -351,13 +351,14 @@ func _roll_gear() -> Dictionary:
 
 func _make_gear_item(kind: String, id: String) -> Dictionary:
 	var bonus := Meta.gear_bonus(kind, id)
+	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
 	return {
 		"kind": kind,
 		"id": id,
-		"name": Meta.gear_title(kind, id),
+		"name": Loc.gear_name(id),
 		"tex": Meta.gear_texture(kind, id),
 		"bonus": bonus,
-		"bonus_text": "+%d %s" % [bonus, "DMG" if kind == "weapon" else "HP"],
+		"bonus_text": Loc.t("gear_desc") % [bonus, unit],
 	}
 
 
@@ -380,7 +381,7 @@ func drop_bag_item(index: int) -> void:
 	bag.remove_at(index)
 	hud.set_bag(bag.size(), BAG_SIZE)
 	hud.open_bag(bag)
-	hud.message("DROPPED %s" % str(item.name), 1.0)
+	hud.message(Loc.t("msg_dropped") % Loc.t("gear_" + str(item.id)), 1.0)
 
 
 func _toggle_bag() -> void:
@@ -417,10 +418,10 @@ func _extract() -> void:
 	await get_tree().create_timer(0.35).timeout
 	if state != "extracting":
 		return
-	hud.message("EXTRACTED  +%d G" % gained, 2.0)
-	var tail := "RETURNING TO CAMP…" if punished else "ESC CAMP"
-	hud.show_end("EXTRACTED",
-		"+%d G   ·   %d GEAR STORED\n%s" % [gained, stored, tail],
+	hud.message(Loc.t("msg_extracted") % gained, 2.0)
+	var tail := Loc.t("returning_camp") if punished else Loc.t("esc_camp")
+	hud.show_end(Loc.t("end_extracted"),
+		Loc.t("end_extracted_sub") % [gained, stored, tail],
 		Color("#8fd18a"))
 	hud.fade_to(0.0, 0.4)
 	state = "ended"
@@ -445,16 +446,16 @@ func _fail(reason: String) -> void:
 		Meta.lose_gear()
 		bag.clear()
 		hud.set_bag(0, BAG_SIZE)
-		Meta.record_result("%s   ·   %d G LOST   ·   %d GEAR LOST" % [reason, lost, lost_gear])
+		Meta.record_result(Loc.t("result_lost") % [reason, lost, lost_gear])
 	hud.message("", 0.0)
 	hud.set_enemies(-1)
 	hud.set_timer(0.0)
 	_set_hint("")
 	var subtitle: String
 	if punished:
-		subtitle = "%d G LOST   ·   %d GEAR LOST   ·   EQUIPMENT LOST\nRETURNING TO CAMP…" % [lost, lost_gear]
+		subtitle = Loc.t("end_lost_sub") % [lost, lost_gear, Loc.t("returning_camp")]
 	else:
-		subtitle = "%d G   ·   %d GEAR   ·   DEMO — NO PENALTIES\nR RETRY      ESC CAMP" % [lost, lost_gear]
+		subtitle = Loc.t("end_demo_sub") % [lost, lost_gear]
 	await get_tree().create_timer(0.6).timeout
 	if state != "dead":
 		return
@@ -481,14 +482,14 @@ func _on_health_changed(hp: int, max_hp: int) -> void:
 
 
 func _on_player_died() -> void:
-	_fail("YOU DIED")
+	_fail(Loc.t("reason_died"))
 
 
 func _return_to_menu() -> void:
 	# 撤离前按 ESC 视为放弃：背包与装备全部丢失。
 	if _penalties_enabled() and (state == "playing" or state == "cleared" or state == "extracting"):
 		Meta.lose_gear()
-		Meta.record_result("ABANDONED   ·   LOOT AND GEAR LOST")
+		Meta.record_result(Loc.t("result_abandoned"))
 	Meta.save_data()
 	get_tree().change_scene_to_file("res://scenes/hub.tscn")
 
