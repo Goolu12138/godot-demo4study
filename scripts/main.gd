@@ -1,9 +1,10 @@
 extends Node2D
-## 搜打撤循环：进图 -> 搜索容器 / 清场 -> 限时内从撤离点离开 -> 回休息处。
+## 搜打撤循环：穿过三张固定地图，在限时内找到随机刷新的撤离梯离开。
 ##
 ## 规则：
 ##   - 贵重品只记估值，装备先放进 6 格背包，两者都要成功撤离才结算；
-##   - 清场后撤离点（顶墙的门）开启，走进去结算；
+##   - 三张图用顶墙的门依次连接，门一直是开的，不要求清怪；
+##   - 怪物的种类与位置每局随机，可以打也可以绕；
 ##   - 死亡 / 倒计时归零 / 主动放弃：背包清空，身上的武器与护甲一起丢失；
 ##   - 撤离或死亡后自动回到休息处，仓库在那边。
 
@@ -12,7 +13,11 @@ const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
 const CONFIRM_SCENE := preload("res://scenes/confirm_dialog.tscn")
 
 ## 一局的时间预算，超时视为死亡。
-const RUN_TIME := 150.0
+const RUN_TIME := 900.0
+## 倒计时剩 7:00 时开始刷新撤离点，之后每隔 15~25 秒刷一个。
+const EXTRACTION_START_TIME := 7.0 * 60.0
+const EXTRACTION_SPAWN_MIN := 15.0
+const EXTRACTION_SPAWN_MAX := 25.0
 
 ## 背包只装装备，格子满了必须丢一件才能捡新的。
 const BAG_SIZE := 6
@@ -47,7 +52,7 @@ var loot_count := 0
 var bag: Array[Dictionary] = []
 var bag_open := false
 var time_left := RUN_TIME
-## playing / cleared / extracting / dead / ended
+## playing / moving / extracting / dead / ended
 var state := "playing"
 var enemies_alive := 0
 ## 测试与截图模式可以关掉自动回城。
@@ -57,6 +62,14 @@ var _last_hp := 0
 var _hint := ""
 var _full_warn := 0.0
 var _confirm: CanvasLayer
+var _confirm_mode := ""
+var _switch_busy := false
+var _extraction_spawn_cd := 0.0
+var _extraction_spawned := 0
+## 撤离梯前需要先离开再靠近才会再次弹确认，避免取消后立刻又弹。
+var _extract_armed := true
+## 换图后短暂忽略门判定，避免刚出生就被身后的门弹回去。
+var _door_grace := 0.0
 
 
 func _ready() -> void:
@@ -79,10 +92,17 @@ func _ready() -> void:
 		_diagnose()
 	if "--abandon-shot" in OS.get_cmdline_user_args():
 		_capture_abandon()
+	if "--map-shot" in OS.get_cmdline_user_args():
+		_capture_map()
+	if "--extract-shot" in OS.get_cmdline_user_args():
+		_capture_extract()
+	if "--ladder-shot" in OS.get_cmdline_user_args():
+		_capture_ladder()
 
 
 func _process(delta: float) -> void:
 	_full_warn = maxf(0.0, _full_warn - delta)
+	_door_grace = maxf(0.0, _door_grace - delta)
 	if Input.is_action_just_pressed("menu"):
 		_request_abandon()
 		return
@@ -90,12 +110,13 @@ func _process(delta: float) -> void:
 		if Input.is_action_just_pressed("restart"):
 			_start_run()
 		return
-	if state == "extracting":
+	if state == "moving" or state == "extracting":
 		return
 	if player == null or player.dead:
 		return
 
-	if Input.is_action_just_pressed("bag") and (state == "playing" or state == "cleared"):
+
+	if Input.is_action_just_pressed("bag") and state == "playing" and not _switch_busy:
 		_toggle_bag()
 		return
 	if bag_open:
@@ -103,10 +124,11 @@ func _process(delta: float) -> void:
 		_tick_timer(delta)
 		return
 
-	if state == "playing" or state == "cleared":
+	if state == "playing":
 		_tick_timer(delta)
 		if state == "dead":
 			return
+		_update_extraction_spawns(delta)
 
 	for loot in get_tree().get_nodes_in_group("loot"):
 		if loot.global_position.distance_to(player.global_position) < 26.0:
@@ -121,22 +143,52 @@ func _process(delta: float) -> void:
 			loot.remove_from_group("loot")
 			loot.queue_free()
 
+	var switch_index := dungeon.switch_near(player.global_position)
 	var can_search := dungeon.can_search(player.global_position)
-	if can_search and Input.is_action_just_pressed("interact"):
-		_search()
+	if Input.is_action_just_pressed("interact") and not _switch_busy:
+		if switch_index >= 0:
+			_operate_switch(switch_index)
+		elif can_search:
+			_search()
 
-	if state == "cleared" and dungeon.at_door(player.global_position):
-		_extract()
-		return
+	# 撤离点取消确认后，需要先走开再靠近，避免站在梯子上反复弹窗。
+	if state == "playing" and not _extract_armed \
+			and dungeon.extraction_distance(player.global_position) > 46.0:
+		_extract_armed = true
 
-	if state == "extracting":
-		_set_hint(Loc.t("hint_extracting"))
-	elif state == "cleared":
-		_set_hint(Loc.t("hint_exit"))
+	if state == "playing" and _door_grace <= 0.0 and dungeon.extraction_hit(player.global_position):
+		if _extract_armed:
+			_request_extract()
+			return
+
+	if switch_index >= 0:
+		_set_hint(Loc.t("hint_switch"))
 	elif can_search:
 		_set_hint(Loc.t("hint_search"))
+	elif dungeon.has_extraction_ladder():
+		_set_hint(Loc.t("hint_extract_room"))
 	else:
-		_set_hint(Loc.t("hint_play"))
+		_set_hint(Loc.t("hint_world"))
+
+
+## 拉开关需要 0.5 秒：期间锁住玩家操作，结束后才真正切换门和碰撞。
+func _operate_switch(door_index: int) -> void:
+	if _switch_busy or state != "playing":
+		return
+	var will_open := not dungeon.is_passage_door_open(door_index)
+	if not will_open and dungeon.door_position(door_index).distance_to(player.global_position) < 26.0:
+		hud.message(Loc.t("door_blocked"), 1.2)
+		return
+	_switch_busy = true
+	player.control_enabled = false
+	hud.message(Loc.t("switch_opening") if will_open else Loc.t("switch_closing"), 0.7)
+	await get_tree().create_timer(0.5).timeout
+	if state == "playing":
+		dungeon.toggle_door(door_index)
+		hud.message(Loc.t("switch_opened") if will_open else Loc.t("switch_closed"), 0.9)
+	if player != null and not player.dead:
+		player.control_enabled = true
+	_switch_busy = false
 
 
 func _tick_timer(delta: float) -> void:
@@ -146,10 +198,29 @@ func _tick_timer(delta: float) -> void:
 		_fail(Loc.t("reason_timeup"))
 
 
+## 倒计时到 7:00 后开始刷新撤离点，每隔一段时间刷一个，最多 5 个。
+func _update_extraction_spawns(delta: float) -> void:
+	if time_left > EXTRACTION_START_TIME:
+		return
+	if _extraction_spawned >= Dungeon.MAX_EXTRACTION_LADDERS:
+		return
+	_extraction_spawn_cd -= delta
+	if _extraction_spawn_cd > 0.0:
+		return
+	if dungeon.spawn_extraction_ladder():
+		_extraction_spawned += 1
+		hud.message(Loc.t("extraction_spawned"), 1.6)
+		_extraction_spawn_cd = randf_range(EXTRACTION_SPAWN_MIN, EXTRACTION_SPAWN_MAX)
+	else:
+		_extraction_spawn_cd = 5.0
+
+
 func _start_run() -> void:
 	raid = Meta.raids + 1
 	loot_value = 0
 	loot_count = 0
+	_extraction_spawn_cd = 0.0
+	_extraction_spawned = 0
 	bag.clear()
 	bag_open = false
 	time_left = RUN_TIME
@@ -167,15 +238,18 @@ func _start_run() -> void:
 
 func _build_room() -> void:
 	_clear_actors()
-	dungeon.generate(randi(), raid)
+	dungeon.build_world()
 	player.reset(dungeon.spawn_point())
 	_update_camera_limits()
 	_spawn_enemies()
 	state = "playing"
+	player.control_enabled = true
+	_door_grace = 0.7
+	_extract_armed = true
 	hud.set_raid(raid)
 	hud.set_enemies(enemies_alive)
-	hud.message(Loc.t("msg_start"), 2.0)
-	_set_hint(Loc.t("hint_play"))
+	hud.message(Loc.t("msg_start"), 2.2)
+	_set_hint(Loc.t("hint_world"))
 
 
 func _clear_actors() -> void:
@@ -197,7 +271,7 @@ func _update_camera_limits() -> void:
 
 
 func _spawn_enemies() -> void:
-	var count: int = mini(4 + raid, 10)
+	var count: int = mini(6 + raid * 2, 20)
 	enemies_alive = count
 	var pool: Array[String] = ["goblin", "goblin", "skelet"]
 	if raid >= 2:
@@ -228,14 +302,6 @@ func _on_enemy_died(enemy: Node) -> void:
 		_spawn_item(enemy.global_position, _roll_valuable())
 	elif roll < 0.84:
 		_spawn_item(enemy.global_position, _roll_gear())
-	if enemies_alive <= 0 and state == "playing":
-		_room_cleared()
-
-
-func _room_cleared() -> void:
-	state = "cleared"
-	dungeon.open_door()
-	hud.message(Loc.t("msg_clear"), 2.6)
 
 
 # ---------------------------------------------------------------- 搜索 / 战利品
@@ -405,7 +471,7 @@ func _toggle_bag() -> void:
 # ---------------------------------------------------------------- 撤离 / 失败
 
 func _extract() -> void:
-	if state != "cleared":
+	if state != "playing":
 		return
 	state = "extracting"
 	if bag_open:
@@ -506,16 +572,36 @@ func _request_abandon() -> void:
 	if bag_open:
 		_toggle_bag()
 		return
-	if state != "playing" and state != "cleared" and state != "extracting":
+	if state != "playing" and state != "extracting":
 		return
+	_confirm_mode = "abandon"
 	get_tree().paused = true
 	_confirm.ask(Loc.t("abandon_title"), Loc.t("abandon_body"),
 		Loc.t("abandon_yes"), Loc.t("abandon_no"))
 
 
+## 走到撤离梯：先确认，确认后才结算。
+func _request_extract() -> void:
+	if _confirm == null or _confirm.is_open() or state != "playing":
+		return
+	if bag_open:
+		_toggle_bag()
+		return
+	_confirm_mode = "extract"
+	get_tree().paused = true
+	_confirm.ask(Loc.t("extract_title"), Loc.t("extract_body"),
+		Loc.t("extract_yes"), Loc.t("extract_no"))
+
+
 func _on_abandon_confirmed() -> void:
 	get_tree().paused = false
-	if _penalties_enabled() and (state == "playing" or state == "cleared" or state == "extracting"):
+	if _confirm_mode == "extract":
+		if _confirm != null:
+			_confirm.close()
+		_confirm_mode = ""
+		_extract()
+		return
+	if _penalties_enabled() and (state == "playing" or state == "extracting"):
 		Meta.lose_gear()
 		Meta.record_result(Loc.t("result_abandoned"))
 	Meta.save_data()
@@ -526,6 +612,9 @@ func _on_abandon_cancelled() -> void:
 	get_tree().paused = false
 	if _confirm != null:
 		_confirm.close()
+	if _confirm_mode == "extract":
+		_extract_armed = false
+	_confirm_mode = ""
 
 
 func _leave_to_hall() -> void:
@@ -549,6 +638,44 @@ func _capture_after_delay() -> void:
 	get_tree().quit()
 
 
+## 调试用：截撤离梯特写。
+func _capture_ladder() -> void:
+	player.invuln = 99.0
+	if not dungeon.has_extraction_ladder():
+		dungeon.spawn_extraction_ladder()
+	await get_tree().create_timer(0.4).timeout
+	player.global_position = dungeon.extraction_point() + Vector2(0, 40)
+	player.camera.reset_smoothing()
+	await get_tree().create_timer(0.4).timeout
+	await _save_shot("shot_ladder.png")
+	get_tree().quit()
+
+
+## 调试用：截撤离确认弹窗。
+func _capture_extract() -> void:
+	player.invuln = 99.0
+	if not dungeon.has_extraction_ladder():
+		dungeon.spawn_extraction_ladder()
+	await get_tree().create_timer(0.4).timeout
+	player.global_position = dungeon.extraction_point()
+	await get_tree().create_timer(0.5).timeout
+	await _save_shot("shot_extract.png")
+	get_tree().paused = false
+	get_tree().quit()
+
+
+## 调试用：把整张 120x24 的大地图缩到一屏（map_world.png）。
+func _capture_map() -> void:
+	player.invuln = 99.0
+	await get_tree().create_timer(0.3).timeout
+	player.global_position = dungeon.room_pixel_size() * 0.5
+	player.camera.zoom = Vector2(0.32, 0.32)
+	player.camera.reset_smoothing()
+	await get_tree().create_timer(0.3).timeout
+	await _save_shot("map_world.png")
+	get_tree().quit()
+
+
 func _capture_abandon() -> void:
 	await get_tree().create_timer(0.6).timeout
 	_request_abandon()
@@ -560,6 +687,8 @@ func _capture_abandon() -> void:
 
 func _demo_shots() -> void:
 	player.invuln = 99.0
+	if not dungeon.has_extraction_ladder():
+		dungeon.spawn_extraction_ladder()
 	await get_tree().create_timer(0.5).timeout
 	# 走到房间上方，检查顶墙、旗帜、石柱与门的整体观感。
 	player.global_position = Vector2(96.0, 52.0)
@@ -576,7 +705,7 @@ func _demo_shots() -> void:
 	_toggle_bag()
 	await get_tree().create_timer(0.2).timeout
 
-	player.global_position = dungeon.door_point() + Vector2(0, 44)
+	player.global_position = dungeon.extraction_point() + Vector2(0, 44)
 	await get_tree().create_timer(0.5).timeout
 	await _save_shot("shot_door_closed.png")
 
@@ -595,7 +724,7 @@ func _demo_shots() -> void:
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		enemy.take_damage(99, Vector2.ZERO)
 	await get_tree().create_timer(0.5).timeout
-	player.global_position = dungeon.door_point() + Vector2(0, 44)
+	player.global_position = dungeon.extraction_point() + Vector2(0, 44)
 	await get_tree().create_timer(0.45).timeout
 	await _save_shot("shot_door.png")
 

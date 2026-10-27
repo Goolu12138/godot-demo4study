@@ -23,6 +23,7 @@ var _tileset: TileSet
 var _frames_cache: Dictionary = {}
 var _simple_cache: Dictionary = {}
 var _tex_cache: Dictionary = {}
+var _door_cache: Dictionary = {}
 var _ui_font: Font
 
 
@@ -164,6 +165,43 @@ func tex(texture_name: String) -> Texture2D:
 			push_error("找不到贴图：%s" % texture_name)
 			_tex_cache[texture_name] = null
 	return _tex_cache[texture_name]
+
+
+## 俯视角木门：32x8 横条。关闭时两扇门板合拢，打开时缩到两侧。
+func door_texture(open_state: bool) -> Texture2D:
+	var key := "open" if open_state else "closed"
+	if _door_cache.has(key):
+		return _door_cache[key]
+
+	var image := Image.create(32, 8, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	var frame := Color("#2b1a10")
+	var wood := Color("#8a4a28")
+	var light := Color("#b76634")
+	var handle := Color("#f0c06a")
+
+	image.fill_rect(Rect2i(0, 0, 32, 1), frame)
+	image.fill_rect(Rect2i(0, 7, 32, 1), frame)
+	image.fill_rect(Rect2i(0, 0, 1, 8), frame)
+	image.fill_rect(Rect2i(31, 0, 1, 8), frame)
+
+	if open_state:
+		image.fill_rect(Rect2i(1, 1, 6, 6), wood)
+		image.fill_rect(Rect2i(25, 1, 6, 6), wood)
+		image.fill_rect(Rect2i(1, 1, 6, 2), light)
+		image.fill_rect(Rect2i(25, 1, 6, 2), light)
+		image.set_pixel(7, 4, handle)
+		image.set_pixel(24, 4, handle)
+	else:
+		image.fill_rect(Rect2i(1, 1, 30, 6), wood)
+		image.fill_rect(Rect2i(1, 1, 30, 2), light)
+		image.fill_rect(Rect2i(15, 1, 2, 6), frame)
+		image.set_pixel(13, 4, handle)
+		image.set_pixel(18, 4, handle)
+
+	var texture := ImageTexture.create_from_image(image)
+	_door_cache[key] = texture
+	return texture
 
 
 ## 默认字体只有拉丁字形，中文靠系统字体回退。

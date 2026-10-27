@@ -47,7 +47,7 @@ func _ready() -> void:
 	_style_bag_panel()
 	set_loot(0, 0)
 	set_bag(0, BAG_CAPACITY)
-	set_timer(150.0)
+	set_timer(900.0)
 
 
 func _style_bag_panel() -> void:

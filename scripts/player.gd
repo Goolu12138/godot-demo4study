@@ -193,6 +193,21 @@ func reset(at: Vector2) -> void:
 	health_changed.emit(hp, max_hp)
 
 
+## 换房间用：保留当前血量与装备，只清理速度和短暂无敌。
+func warp_to(at: Vector2) -> void:
+	global_position = at
+	velocity = Vector2.ZERO
+	knockback = Vector2.ZERO
+	control_enabled = true
+	invuln = maxf(invuln, 0.6)
+	attack_cd = 0.0
+	dash_cd = 0.0
+	dash_t = 0.0
+	_trauma = 0.0
+	sprite.play("idle")
+	health_changed.emit(hp, max_hp)
+
+
 func add_trauma(amount: float) -> void:
 	_trauma = minf(1.0, _trauma + amount)
 

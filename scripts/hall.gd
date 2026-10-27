@@ -85,9 +85,7 @@ func _build_room() -> void:
 	dungeon = DUNGEON_SCENE.instantiate()
 	dungeon.room = ROOM
 	add_child(dungeon)
-	dungeon.generate(20261030, 1)
-	# 大厅里不要随机木箱，避免和仓库大箱子、NPC 挤在一起。
-	dungeon.clear_crates()
+	dungeon.build_hall()
 	# 大厅里不需要宝箱，门保持敞开作为出击入口。
 	if dungeon.chest_sprite != null:
 		dungeon.chest_sprite.visible = false

@@ -96,10 +96,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _build_backdrop() -> void:
 	var dungeon: Dungeon = DUNGEON_SCENE.instantiate()
-	dungeon.room = Vector2i(42, 24)
-	dungeon.position = Vector2(-16, -4)
+	dungeon.build_hall()
+	# 大厅只有 30x12；标题背景放大一点铺满 640x360。
+	dungeon.scale = Vector2(2.2, 2.2)
+	dungeon.position = Vector2(-100, -60)
 	add_child(dungeon)
-	dungeon.generate(20261023, 1)
 
 	var dim := ColorRect.new()
 	dim.color = Color(0.03, 0.02, 0.05, 0.74)

@@ -40,13 +40,16 @@ func _run() -> void:
 	check(not main._confirm.is_open(), "取消后关闭弹窗")
 
 	check(main.state == "playing", "开局处于 playing")
-	check(main.enemies_alive == 5, "首局生成 5 个敌人（实际 %d）" % main.enemies_alive)
-	check(get_tree().get_nodes_in_group("enemies").size() == 5, "敌人已加入 enemies 组")
+	check(main.enemies_alive == 8, "首局生成 8 个敌人（实际 %d）" % main.enemies_alive)
+	check(get_tree().get_nodes_in_group("enemies").size() == 8, "敌人已加入 enemies 组")
 	check(main.time_left > 140.0, "倒计时已启动（%.0f）" % main.time_left)
 	check(main.bag.is_empty(), "开局背包为空")
 	check(main.hud._bag_max == 6, "背包容量为 6")
 
 	var enemy: Node = get_tree().get_nodes_in_group("enemies")[0]
+	# 出生点周围 96px 内不会生成障碍物，先把它放到这段空地上再测追逐，避免柱子挡路导致偶发失败。
+	enemy.global_position = main.player.global_position + Vector2(72, 0)
+	await get_tree().physics_frame
 	var before: float = enemy.global_position.distance_to(main.player.global_position)
 	await get_tree().create_timer(0.5).timeout
 	var after: float = enemy.global_position.distance_to(main.player.global_position)
@@ -60,7 +63,7 @@ func _run() -> void:
 
 	enemy.take_damage(99, main.player.global_position)
 	await get_tree().process_frame
-	check(main.enemies_alive == 4, "击杀敌人后计数减少（%d）" % main.enemies_alive)
+	check(main.enemies_alive == 7, "击杀敌人后计数减少（%d）" % main.enemies_alive)
 
 	# 搜索：贵重品记估值，装备进背包，都不写存档
 	main.player.global_position = main.dungeon.chest_position()
@@ -109,17 +112,45 @@ func _run() -> void:
 	main.add_gear_to_bag("weapon", "katana")
 	main.add_gear_to_bag("armor", "chain")
 
-	for leftover in get_tree().get_nodes_in_group("enemies"):
-		leftover.take_damage(99, Vector2.ZERO)
-	await get_tree().create_timer(0.1).timeout
-	check(main.state == "cleared", "清场后进入 cleared 状态（%s）" % main.state)
-	check(main.dungeon.is_door_open(), "清场后撤离点开启")
-
-	# 撤离：贵重品入账，背包装备进仓库
-	var haul: int = main.loot_value
-	main.player.global_position = main.dungeon.door_point() + Vector2(0, 30)
+	# 开关交互：0.5 秒内门还没切换，结束后打开；再交互一次关上
+	main.player.invuln = 99.0
+	main.player.global_position = main.dungeon._switches[0].pos
+	main._operate_switch(0)
+	check(not main.dungeon.is_passage_door_open(0), "交互 0.5 秒内门还没有打开")
 	await get_tree().create_timer(0.7).timeout
-	check(main.state == "ended", "走进撤离点后结束本局（%s）" % main.state)
+	check(main.dungeon.is_passage_door_open(0), "交互 0.5 秒后门打开")
+	main._operate_switch(0)
+	await get_tree().create_timer(0.7).timeout
+	check(not main.dungeon.is_passage_door_open(0), "再次交互把门关上")
+
+	# 撤离点只在倒计时 7:00 后开始刷新，且是陆续刷新的
+	check(not main.dungeon.has_extraction_ladder(), "开局没有撤离点")
+	main.time_left = 421.0
+	main._update_extraction_spawns(0.1)
+	check(not main.dungeon.has_extraction_ladder(), "7:00 之前不刷新撤离点")
+	main.time_left = 419.0
+	main._update_extraction_spawns(0.1)
+	check(main.dungeon.has_extraction_ladder(), "倒计时到 7:00 后开始刷新撤离点")
+
+	# 不要求清怪：整张大地图可以自由穿行，直接去撤离梯
+	main.player.invuln = 99.0
+	var haul: int = main.loot_value
+	main.player.global_position = main.dungeon.extraction_point()
+	await get_tree().create_timer(0.2).timeout
+	check(main._confirm.is_open() and main._confirm_mode == "extract", "撤离梯弹出确认")
+	check(get_tree().paused, "撤离确认时暂停游戏")
+	main._confirm.cancel()
+	await get_tree().create_timer(0.1).timeout
+	check(main.state == "playing" and not get_tree().paused, "取消撤离后继续游戏")
+
+	main.player.global_position = main.dungeon.extraction_point() + Vector2(0, -90)
+	await get_tree().create_timer(0.2).timeout
+	main.player.global_position = main.dungeon.extraction_point()
+	await get_tree().create_timer(0.2).timeout
+	check(main._confirm.is_open(), "走开再靠近会再次弹撤离确认")
+	main._on_abandon_confirmed()
+	await get_tree().create_timer(1.0).timeout
+	check(main.state == "ended", "确认撤离后结束本局（%s）" % main.state)
 	check(Meta.gold == main.loot_value, "撤离后贵重品入账（%d / %d）" % [Meta.gold, main.loot_value])
 	check(main.loot_value >= haul, "撤离时携带的贵重品没有丢失（%d）" % main.loot_value)
 	check(main.bag.is_empty(), "撤离后背包清空")
@@ -136,7 +167,7 @@ func _run() -> void:
 	check(main.loot_value == 0 and main.loot_count == 0, "新局贵重品清零")
 	check(main.bag.is_empty(), "新局背包清空")
 	check(main.raid == 2, "第二局 RAID 递增（%d）" % main.raid)
-	check(main.enemies_alive == 6, "第二局敌人更多（%d）" % main.enemies_alive)
+	check(main.enemies_alive == 10, "第二局敌人更多（%d）" % main.enemies_alive)
 
 	# 死亡：背包清空 + 身上装备从仓库消失
 	check(Meta.equip_gear("weapon", "katana"), "从仓库装备 KATANA")
