@@ -5,6 +5,9 @@ class_name Player
 signal health_changed(hp: int, max_hp: int)
 signal died
 
+## 休息大厅里只走路，不挥刀不冲刺。
+@export var combat_enabled := true
+
 const BASE_MAX_HP := 6
 const BASE_SPEED := 92.0
 const BASE_DAMAGE := 1
@@ -73,9 +76,9 @@ func _read_input(delta: float) -> void:
 		facing = input.normalized()
 		sprite.flip_h = facing.x < -0.05
 
-	if Input.is_action_just_pressed("attack") and attack_cd <= 0.0:
+	if combat_enabled and Input.is_action_just_pressed("attack") and attack_cd <= 0.0:
 		_start_attack()
-	if Input.is_action_just_pressed("dash") and dash_cd <= 0.0 and dash_t <= 0.0:
+	if combat_enabled and Input.is_action_just_pressed("dash") and dash_cd <= 0.0 and dash_t <= 0.0:
 		dash_t = DASH_TIME
 		dash_cd = 0.65
 		invuln = maxf(invuln, 0.24)

@@ -24,7 +24,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 	check(menu._hero_slots.size() == 4, "四个角色格")
-	check(menu.hub_mode == false, "菜单处于标题模式")
+	check(menu.ui_only == false, "菜单处于标题模式")
 	check(menu._main_box.get_child_count() == 3, "标题有进入大厅 / 设置 / 退出三个按钮")
 	check(menu._hero_slots[0].button_pressed, "默认选中骑士")
 	check(menu._hero_slots[1].button_pressed == false, "锁定角色默认未选中")
@@ -64,6 +64,28 @@ func _ready() -> void:
 	check(Meta.equip_gear("weapon", "katana"), "再换回 KATANA")
 	check(not Meta.equip_gear("weapon", "golden_sword"), "没进货的装备不能装备")
 
+	# 出售：默认装备与身上最后一件不能卖，其余按买入价一半回收
+	check(not Meta.sell_gear("weapon", "rusty_sword"), "默认武器不能出售")
+	check(not Meta.sell_gear("weapon", "katana"), "身上最后一件武器不能出售")
+	var sell_price := Meta.gear_sell_price("weapon", "knight_sword")
+	check(sell_price == 60, "出售价是买入价的一半（%d）" % sell_price)
+	var gold_before_sell := Meta.gold
+	check(Meta.sell_gear("weapon", "knight_sword"), "仓库里的备用武器可以出售")
+	check(Meta.owned_count("weapon", "knight_sword") == 0, "出售后仓库数量减少")
+	check(Meta.gold == gold_before_sell + sell_price, "出售获得金币（%d）" % Meta.gold)
+
+	# 仓库容量：默认 100，可付费扩容，满仓拒绝新装备
+	Meta.stash_capacity = Meta.STASH_BASE_CAPACITY
+	check(Meta.stash_capacity == 100, "仓库默认 100 格")
+	Meta.gold = 1000
+	var stash_cost := Meta.next_stash_cost()
+	check(Meta.upgrade_stash(), "金币足够时扩建仓库")
+	check(Meta.stash_capacity == 120, "仓库扩容 +20 格（%d）" % Meta.stash_capacity)
+	check(Meta.gold == 1000 - stash_cost, "仓库扩容扣款正确（剩 %d）" % Meta.gold)
+	Meta.stash_capacity = Meta.stash_used()
+	check(not Meta.buy_gear("weapon", "golden_sword"), "仓库满时不能再买装备")
+	Meta.stash_capacity = 120
+
 	# 面板开关
 	menu._refresh_shop()
 	menu._open_shop()
@@ -80,6 +102,7 @@ func _ready() -> void:
 	# 设置：音量滑块 + 中英文词条
 	menu._open_settings()
 	check(menu._settings_panel.visible, "打开设置面板")
+	check(menu._quit_button == null, "标题菜单的设置里不重复放退出按钮")
 	check(menu._volume_slider != null, "设置里有音量滑块")
 	menu._volume_slider.value = 35.0 if Meta.volume != 35 else 34.0
 	menu._volume_slider.value = 35.0
@@ -94,15 +117,16 @@ func _ready() -> void:
 	menu._close_settings()
 	check(menu._settings_panel.visible == false, "关闭设置面板")
 
-	# 休息大厅：独立场景，撤离 / 死亡后回到这里
-	var hub = load("res://scenes/hub.tscn").instantiate()
-	add_child(hub)
+	# 大厅 UI 层：只构建面板，供可走动的 hall 复用
+	var hall_ui = load("res://scenes/hall_ui.tscn").instantiate()
+	add_child(hall_ui)
 	await get_tree().process_frame
-	check(hub.hub_mode, "休息大厅场景处于大厅模式")
-	check(hub._main_box.get_child_count() == 5, "大厅有出击 / 仓库 / 商店 / 设置 / 离开五个按钮")
-	check(hub._loadout.text.contains("LOADOUT"), "大厅显示当前装备概况")
-	check(hub._stash_panel != null and hub._shop_panel != null, "大厅内置仓库与商店面板")
-	hub.queue_free()
+	check(hall_ui.ui_only, "hall_ui 处于纯 UI 模式")
+	check(hall_ui._shop_panel != null and hall_ui._stash_panel != null, "大厅 UI 内置仓库与商店面板")
+	hall_ui.open_shop("upgrades")
+	check(hall_ui._shop_panel.visible and hall_ui._shop_scope == "upgrades", "铁匠面板只展示升级")
+	hall_ui.close_all()
+	hall_ui.queue_free()
 
 	# 装备与升级作用到玩家
 	var main = load("res://scenes/main.tscn").instantiate()
@@ -136,6 +160,7 @@ func _snapshot() -> void:
 		"last_result": Meta.last_result,
 		"volume": Meta.volume,
 		"language": Meta.language,
+		"stash_capacity": Meta.stash_capacity,
 	}
 
 
@@ -152,6 +177,7 @@ func _restore() -> void:
 	Meta.last_result = str(_saved.last_result)
 	Meta.volume = int(_saved.volume)
 	Meta.language = str(_saved.language)
+	Meta.stash_capacity = int(_saved.stash_capacity)
 	Meta.apply_audio()
 	Meta.save_data()
 

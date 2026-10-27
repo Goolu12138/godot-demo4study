@@ -9,6 +9,7 @@ extends Node2D
 
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
+const CONFIRM_SCENE := preload("res://scenes/confirm_dialog.tscn")
 
 ## 一局的时间预算，超时视为死亡。
 const RUN_TIME := 150.0
@@ -55,9 +56,15 @@ var auto_return := true
 var _last_hp := 0
 var _hint := ""
 var _full_warn := 0.0
+var _confirm: CanvasLayer
 
 
 func _ready() -> void:
+	_confirm = CONFIRM_SCENE.instantiate()
+	add_child(_confirm)
+	_confirm.confirmed.connect(_on_abandon_confirmed)
+	_confirm.cancelled.connect(_on_abandon_cancelled)
+
 	player = PLAYER_SCENE.instantiate() as Player
 	actors.add_child(player)
 	player.health_changed.connect(_on_health_changed)
@@ -70,12 +77,14 @@ func _ready() -> void:
 		_demo_shots()
 	if "--diag" in OS.get_cmdline_user_args():
 		_diagnose()
+	if "--abandon-shot" in OS.get_cmdline_user_args():
+		_capture_abandon()
 
 
 func _process(delta: float) -> void:
 	_full_warn = maxf(0.0, _full_warn - delta)
 	if Input.is_action_just_pressed("menu"):
-		_return_to_menu()
+		_request_abandon()
 		return
 	if state == "dead" or state == "ended":
 		if Input.is_action_just_pressed("restart"):
@@ -428,7 +437,7 @@ func _extract() -> void:
 	if auto_return and punished:
 		await get_tree().create_timer(2.0).timeout
 		if state == "ended":
-			get_tree().change_scene_to_file("res://scenes/hub.tscn")
+			get_tree().change_scene_to_file("res://scenes/hall.tscn")
 
 
 func _fail(reason: String) -> void:
@@ -463,7 +472,7 @@ func _fail(reason: String) -> void:
 	if auto_return and punished:
 		await get_tree().create_timer(2.0).timeout
 		if state == "dead":
-			get_tree().change_scene_to_file("res://scenes/hub.tscn")
+			get_tree().change_scene_to_file("res://scenes/hall.tscn")
 
 
 func _penalties_enabled() -> bool:
@@ -485,13 +494,44 @@ func _on_player_died() -> void:
 	_fail(Loc.t("reason_died"))
 
 
-func _return_to_menu() -> void:
-	# 撤离前按 ESC 视为放弃：背包与装备全部丢失。
+# ---------------------------------------------------------------- 主动放弃（Esc）
+
+## Esc 不再直接回大厅：先暂停游戏并弹二次确认。
+func _request_abandon() -> void:
+	if _confirm == null or _confirm.is_open():
+		return
+	if state == "dead" or state == "ended":
+		_leave_to_hall()
+		return
+	if bag_open:
+		_toggle_bag()
+		return
+	if state != "playing" and state != "cleared" and state != "extracting":
+		return
+	get_tree().paused = true
+	_confirm.ask(Loc.t("abandon_title"), Loc.t("abandon_body"),
+		Loc.t("abandon_yes"), Loc.t("abandon_no"))
+
+
+func _on_abandon_confirmed() -> void:
+	get_tree().paused = false
 	if _penalties_enabled() and (state == "playing" or state == "cleared" or state == "extracting"):
 		Meta.lose_gear()
 		Meta.record_result(Loc.t("result_abandoned"))
 	Meta.save_data()
-	get_tree().change_scene_to_file("res://scenes/hub.tscn")
+	_leave_to_hall()
+
+
+func _on_abandon_cancelled() -> void:
+	get_tree().paused = false
+	if _confirm != null:
+		_confirm.close()
+
+
+func _leave_to_hall() -> void:
+	get_tree().paused = false
+	Meta.save_data()
+	get_tree().change_scene_to_file("res://scenes/hall.tscn")
 
 
 func _set_hint(text: String) -> void:
@@ -506,6 +546,15 @@ func _set_hint(text: String) -> void:
 func _capture_after_delay() -> void:
 	await get_tree().create_timer(1.0).timeout
 	await _save_shot("shot.png")
+	get_tree().quit()
+
+
+func _capture_abandon() -> void:
+	await get_tree().create_timer(0.6).timeout
+	_request_abandon()
+	await get_tree().create_timer(0.3).timeout
+	await _save_shot("shot_abandon.png")
+	get_tree().paused = false
 	get_tree().quit()
 
 

@@ -9,6 +9,8 @@ var _saved := {}
 
 func _ready() -> void:
 	_snapshot()
+	# 结果文案是本地化的，测试固定英文，避免受存档里的语言设置影响。
+	Loc.language = "en"
 	Meta.gold = 0
 	Meta.raids = 0
 	Meta.best_haul = 0
@@ -29,6 +31,14 @@ func _ready() -> void:
 
 
 func _run() -> void:
+	# Esc 二次确认：先暂停并弹窗，取消后恢复
+	main._request_abandon()
+	check(get_tree().paused, "按 Esc 先暂停并弹出确认")
+	check(main._confirm.is_open(), "确认弹窗已显示")
+	main._on_abandon_cancelled()
+	check(not get_tree().paused, "取消后恢复游戏")
+	check(not main._confirm.is_open(), "取消后关闭弹窗")
+
 	check(main.state == "playing", "开局处于 playing")
 	check(main.enemies_alive == 5, "首局生成 5 个敌人（实际 %d）" % main.enemies_alive)
 	check(get_tree().get_nodes_in_group("enemies").size() == 5, "敌人已加入 enemies 组")
@@ -57,11 +67,12 @@ func _run() -> void:
 	check(main.dungeon.can_search(main.player.global_position), "靠近宝箱可以搜索")
 	var loot_before: int = main.loot_value
 	var bag_before: int = main.bag.size()
+	var left_before: int = main.dungeon.searchable_left()
 	main._search()
 	await get_tree().process_frame
 	check(main.dungeon.is_chest_open(), "按 E 搜开宝箱")
 	check(main.loot_value > loot_before or main.bag.size() > bag_before, "宝箱产出战利品")
-	check(not main.dungeon.can_search(main.player.global_position), "同一容器不能重复搜索")
+	check(main.dungeon.searchable_left() == left_before - 1, "容器搜过后从可搜索列表移除，不能重复搜索")
 	check(Meta.gold == 0, "搜索不写存档，金币仍为 0")
 
 	# 地面掉落：贵重品自动入账，装备进背包

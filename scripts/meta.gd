@@ -18,6 +18,11 @@ const UPGRADES := {
 const DEFAULT_WEAPON := "rusty_sword"
 const DEFAULT_ARMOR := "cloth"
 
+## 仓库默认 100 格，每次扩容 +20，最多 200。
+const STASH_BASE_CAPACITY := 100
+const STASH_STEP := 20
+const STASH_MAX_CAPACITY := 200
+
 const WEAPONS := {
 	"rusty_sword": {"title": "RUSTY SWORD", "desc": "+0 DAMAGE", "bonus": 0, "cost": 0, "texture": "weapon_rusty_sword"},
 	"knight_sword": {"title": "KNIGHT SWORD", "desc": "+1 DAMAGE", "bonus": 1, "cost": 120, "texture": "weapon_knight_sword"},
@@ -42,6 +47,7 @@ var best_haul := 0
 ## 仓库：同一件装备可以有多把，用数组存。
 var owned_weapons: Array[String] = []
 var owned_armors: Array[String] = []
+var stash_capacity := STASH_BASE_CAPACITY
 ## 休息处顶部展示的上一局结果。
 var last_result := ""
 ## 设置项：主音量 0-100，界面语言 en / zh。
@@ -69,6 +75,7 @@ func load_data() -> void:
 	language = "en"
 	owned_weapons = []
 	owned_armors = []
+	stash_capacity = STASH_BASE_CAPACITY
 	var config := ConfigFile.new()
 	if config.load(SAVE_PATH) != OK:
 		return
@@ -83,6 +90,8 @@ func load_data() -> void:
 	last_result = str(config.get_value("run", "last_result", ""))
 	volume = int(config.get_value("settings", "volume", 80))
 	language = str(config.get_value("settings", "language", "en"))
+	stash_capacity = clampi(int(config.get_value("stash", "capacity", STASH_BASE_CAPACITY)),
+		STASH_BASE_CAPACITY, STASH_MAX_CAPACITY)
 	for id in _string_array(config.get_value("stash", "weapons", [])):
 		if WEAPONS.has(id) and id != DEFAULT_WEAPON:
 			owned_weapons.append(id)
@@ -110,6 +119,7 @@ func save_data() -> void:
 	config.set_value("settings", "language", language)
 	config.set_value("stash", "weapons", owned_weapons)
 	config.set_value("stash", "armors", owned_armors)
+	config.set_value("stash", "capacity", stash_capacity)
 	config.save(SAVE_PATH)
 
 
@@ -129,6 +139,7 @@ func _string_array(value) -> Array[String]:
 
 
 # ---------------------------------------------------------------- 永久升级
+
 
 func upgrade_level(key: String) -> int:
 	return int(_levels.get(key, 0))
@@ -154,6 +165,33 @@ func buy(key: String) -> bool:
 		return false
 	gold -= cost
 	_levels[key] = upgrade_level(key) + 1
+	save_data()
+	return true
+
+
+# ---------------------------------------------------------------- 仓库容量
+
+func stash_used() -> int:
+	return owned_weapons.size() + owned_armors.size()
+
+
+func stash_level() -> int:
+	return (stash_capacity - STASH_BASE_CAPACITY) / STASH_STEP
+
+
+## 仓库扩容价格；已满返回 -1。
+func next_stash_cost() -> int:
+	if stash_capacity >= STASH_MAX_CAPACITY:
+		return -1
+	return 150 * (stash_level() + 1)
+
+
+func upgrade_stash() -> bool:
+	var cost := next_stash_cost()
+	if cost < 0 or gold < cost:
+		return false
+	gold -= cost
+	stash_capacity = mini(stash_capacity + STASH_STEP, STASH_MAX_CAPACITY)
 	save_data()
 	return true
 
@@ -194,6 +232,37 @@ func gear_texture(kind: String, id: String) -> String:
 
 func gear_cost(kind: String, id: String) -> int:
 	return int(gear_table(kind)[id].cost)
+
+
+## 出售价：买入价的一半，最低 10 金；默认装备不可出售。
+func gear_sell_price(kind: String, id: String) -> int:
+	var cost := gear_cost(kind, id)
+	if cost <= 0:
+		return 0
+	return maxi(10, int(cost * 0.5))
+
+
+func can_sell_gear(kind: String, id: String) -> bool:
+	if id == default_gear(kind):
+		return false
+	if owned_count(kind, id) <= 0:
+		return false
+	var equipped: String = weapon if kind == "weapon" else armor
+	# 身上正穿着、且只剩这一件时不能卖，避免把装备卖空。
+	if id == equipped and owned_count(kind, id) <= 1:
+		return false
+	return true
+
+
+## 卖掉一件仓库里的装备，返回是否成功。
+func sell_gear(kind: String, id: String) -> bool:
+	if not can_sell_gear(kind, id):
+		return false
+	var list: Array[String] = owned_weapons if kind == "weapon" else owned_armors
+	list.erase(id)
+	gold += gear_sell_price(kind, id)
+	save_data()
+	return true
 
 
 ## 仓库里这件装备有几件（默认装备永远算 1 件）。
@@ -239,6 +308,8 @@ func buy_gear(kind: String, id: String) -> bool:
 		return false
 	if owned_count(kind, id) > 0:
 		return false
+	if stash_used() >= stash_capacity:
+		return false
 	var cost := int(table[id].cost)
 	if cost <= 0 or gold < cost:
 		return false
@@ -277,6 +348,8 @@ func finish_extraction(value: int, gear: Array) -> void:
 	best_haul = maxi(best_haul, value)
 	var stored := 0
 	for item in gear:
+		if stash_used() >= stash_capacity:
+			break
 		var kind := str(item.kind)
 		var id := str(item.id)
 		if kind == "weapon" and WEAPONS.has(id):

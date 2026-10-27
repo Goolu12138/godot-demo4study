@@ -207,6 +207,18 @@ func _place_props() -> void:
 		_register_searchable(crate, "crate", 1)
 
 
+## 大厅等非战斗场景用：清掉随机木箱，避免和仓库大箱子挤在一起。
+func clear_crates() -> void:
+	for child in get_children():
+		if not str(child.name).begins_with("Crate"):
+			continue
+		for i in range(_searchables.size() - 1, -1, -1):
+			if _searchables[i].sprite == child:
+				_searchables.remove_at(i)
+		remove_child(child)
+		child.queue_free()
+
+
 # ---------------------------------------------------------------- 查询接口
 
 func spawn_point() -> Vector2:
@@ -266,6 +278,15 @@ func _register_searchable(sprite: Node2D, kind: String, rolls: int) -> void:
 ## 身边是否有还没搜过的容器。
 func can_search(world_pos: Vector2) -> bool:
 	return _nearest_searchable(world_pos) >= 0
+
+
+## 还没搜过的容器数量。测试用它验证“一个容器只能搜一次”，不会被旁边的木箱干扰。
+func searchable_left() -> int:
+	var total := 0
+	for entry in _searchables:
+		if not bool(entry.opened):
+			total += 1
+	return total
 
 
 func _nearest_searchable(world_pos: Vector2) -> int:
