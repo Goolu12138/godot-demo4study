@@ -22,7 +22,7 @@ position = Vector2(0, -12)
 visible = false
 texture_filter = 1
 position = Vector2(18, 0)
-rotation = -1.5708
+rotation = 1.5708
 
 [node name="Collision" type="CollisionShape2D" parent="."]
 position = Vector2(0, -5)
