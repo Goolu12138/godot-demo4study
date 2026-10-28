@@ -641,5 +641,22 @@ func random_floor_point(min_from_spawn := 0.0, margin := 2) -> Vector2:
 	return _cell_center(Vector2i(3, 12))
 
 
+## 群落刷怪用：在 center 附近的空地板格里随机取一个，避免落进墙里或和道具重叠。
+## 落点按圆形半径裁剪，保证同一群的成员都挤在 radius 以内（喊话半径才够得全）。
+func floor_point_near(center: Vector2, radius: float) -> Vector2:
+	var base := Vector2i(int(center.x / CELL), int(center.y / CELL))
+	var span := maxi(1, int(ceil(radius / CELL)))
+	for attempt in 60:
+		var cell := base + Vector2i(_rng.randi_range(-span, span), _rng.randi_range(-span, span))
+		if not _is_floor(cell) or _occupied.has(cell):
+			continue
+		var spot := _cell_center(cell)
+		if spot.distance_to(center) > radius:
+			continue
+		_occupied[cell] = true
+		return spot
+	return center
+
+
 func _cell_center(cell: Vector2i) -> Vector2:
 	return Vector2((cell.x + 0.5) * CELL, (cell.y + 0.9) * CELL)

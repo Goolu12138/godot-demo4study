@@ -17,6 +17,8 @@ const DASH_SPEED := 340.0
 const DASH_TIME := 0.16
 const ATTACK_RANGE := 42.0
 const ATTACK_ARC := 1.15  # 弧度，约 ±66°
+## 攻击冷却期间的移速倍率：挥剑后走得比怪慢，逼你取舍“再砍一刀”还是“先拉开”。
+const ATTACK_MOVE_FACTOR := 0.6
 
 var max_hp := BASE_MAX_HP
 var hp := BASE_MAX_HP
@@ -39,6 +41,8 @@ var knockback := Vector2.ZERO
 @onready var camera: Camera2D = $Camera
 
 var _trauma := 0.0
+## 脚步噪音计时节流：走动每 0.4 秒、冲刺每 0.3 秒发一次，不必每帧都发。
+var _noise_cd := 0.0
 
 
 func _ready() -> void:
@@ -62,12 +66,28 @@ func _physics_process(delta: float) -> void:
 
 	if not dead and control_enabled:
 		_read_input(delta)
+		_emit_footsteps(delta)
 	else:
 		velocity = velocity.move_toward(Vector2.ZERO, 700.0 * delta)
 		move_and_slide()
 
 	_update_visuals()
 	_update_camera(delta)
+
+
+## 走动 / 冲刺会持续制造噪音：声音比挥剑小得多，但隔着墙也能被听见。
+func _emit_footsteps(delta: float) -> void:
+	_noise_cd = maxf(0.0, _noise_cd - delta)
+	if not combat_enabled or _noise_cd > 0.0:
+		return
+	if velocity.length() < 12.0:
+		return
+	if dash_t > 0.0:
+		Game.emit_noise(global_position, Game.NOISE_DASH, "dash")
+		_noise_cd = 0.3
+	else:
+		Game.emit_noise(global_position, Game.NOISE_WALK, "walk")
+		_noise_cd = 0.4
 
 
 func _read_input(delta: float) -> void:
@@ -87,6 +107,10 @@ func _read_input(delta: float) -> void:
 	var target := input * speed
 	if dash_t > 0.0:
 		target = facing * DASH_SPEED
+	elif attack_cd > 0.0:
+		# 挥剑硬直：出手到下次能攻击的这段时间里移速只有 60%（55 左右，
+		# 比大多数怪慢），所以“砍一刀就退”不再是免费的，站桩输出要付出被贴住的代价。
+		target *= ATTACK_MOVE_FACTOR
 	var accel := ACCEL if input.length() > 0.1 else FRICTION
 	velocity = velocity.move_toward(target + knockback, accel * (3.0 if dash_t > 0.0 else 1.0) * delta)
 	move_and_slide()
@@ -122,6 +146,8 @@ func _start_attack() -> void:
 	attack_t = 0.16
 	sword.visible = true
 	sword_pivot.rotation = facing.angle() - 0.95
+	# 挥剑是最大的玩家噪音：附近没看见你的怪也会循声过来。
+	Game.emit_noise(global_position, Game.NOISE_ATTACK, "attack")
 	_deal_damage()
 
 

@@ -41,8 +41,8 @@ func _run() -> void:
 	check(not main._confirm.is_open(), "取消后关闭弹窗")
 
 	check(main.state == "playing", "开局处于 playing")
-	check(main.enemies_alive == 8, "首局生成 8 个敌人（实际 %d）" % main.enemies_alive)
-	check(get_tree().get_nodes_in_group("enemies").size() == 8, "敌人已加入 enemies 组")
+	check(main.enemies_alive == 15, "首局生成 15 个敌人（实际 %d）" % main.enemies_alive)
+	check(get_tree().get_nodes_in_group("enemies").size() == 15, "敌人已加入 enemies 组")
 	check(main.time_left > 140.0, "倒计时已启动（%.0f）" % main.time_left)
 	check(main.bag.items.is_empty(), "开局背包为空")
 	check(main.bag.cols == 30 and main.bag.rows == 20, "初级背包是 30×20")
@@ -51,6 +51,8 @@ func _run() -> void:
 	var enemy: Node = get_tree().get_nodes_in_group("enemies")[0]
 	# 出生点周围 96px 内不会生成障碍物，先把它放到这段空地上再测追逐，避免柱子挡路导致偶发失败。
 	enemy.global_position = main.player.global_position + Vector2(72, 0)
+	# 同时把仇恨锚点挪过来：否则它离家超过牵引半径会掉头回家，测不到追逐。
+	enemy.set_home(enemy.global_position)
 	await get_tree().physics_frame
 	var before: float = enemy.global_position.distance_to(main.player.global_position)
 	await get_tree().create_timer(0.5).timeout
@@ -65,7 +67,7 @@ func _run() -> void:
 
 	enemy.take_damage(99, main.player.global_position)
 	await get_tree().process_frame
-	check(main.enemies_alive == 7, "击杀敌人后计数减少（%d）" % main.enemies_alive)
+	check(main.enemies_alive == 14, "击杀敌人后计数减少（%d）" % main.enemies_alive)
 
 	# 搜索：贵重品记估值，装备进背包，都不写存档
 	main.player.global_position = main.dungeon.chest_position()
@@ -222,7 +224,7 @@ func _run() -> void:
 	check(main.loot_value == 0 and main.loot_count == 0, "新局贵重品清零")
 	check(main.bag.items.is_empty(), "新局背包清空")
 	check(main.raid == 2, "第二局 RAID 递增（%d）" % main.raid)
-	check(main.enemies_alive == 10, "第二局敌人更多（%d）" % main.enemies_alive)
+	check(main.enemies_alive == 18, "第二局敌人更多（%d）" % main.enemies_alive)
 
 	# 死亡：背包清空 + 身上装备从仓库消失
 	check(Meta.equip_gear("weapon", "katana"), "从仓库装备 KATANA")

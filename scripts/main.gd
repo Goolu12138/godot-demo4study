@@ -19,6 +19,23 @@ const EXTRACTION_START_TIME := 7.0 * 60.0
 const EXTRACTION_SPAWN_MIN := 15.0
 const EXTRACTION_SPAWN_MAX := 25.0
 
+## 刷怪：按“群落”成组出现。一群 1~6 只同族怪挤在一小片区域，
+## 群与群之间尽量拉开 PACK_SPACING —— 这个间距大于敌人喊话半径，
+## 所以惊动一个群落不会立刻把隔壁群落也带过来。
+const PACK_SPACING := 240.0
+const PACK_SCATTER := 40.0
+const PACK_MIN_FROM_PLAYER := 200.0
+## 主族在一群里占的比例：0.6 表示剩下 40% 从本局怪物池里换别的种类，
+## 这样一群会有 2~4 种怪，而不是清一色。
+const PACK_LEADER_RATIO := 0.6
+## 主族的群规模：哥布林成群、食人魔成对（成员的种类仍然是混的）。
+const PACK_SIZE := {
+	"goblin": [3, 6],
+	"skelet": [3, 5],
+	"chort": [2, 4],
+	"ogre": [1, 2],
+}
+
 ## 贵重品：撤离时折算成金币；体积各不相同，一样占用背包格子。
 const VALUE_TABLE := [
 	{"id": "coins", "value": 5, "tex": "coin_anim_f0", "weight": 50, "w": 1, "h": 1},
@@ -182,6 +199,8 @@ func _operate_switch(door_index: int) -> void:
 	await get_tree().create_timer(0.5).timeout
 	if state == "playing":
 		dungeon.toggle_door(door_index)
+		# 开 / 关门的动静最大：门两边的怪都会被引过来查看。
+		Game.emit_noise(dungeon.door_position(door_index), Game.NOISE_DOOR, "door")
 		hud.message(Loc.t("switch_opened") if will_open else Loc.t("switch_closed"), 0.9)
 	if player != null and not player.dead:
 		player.control_enabled = true
@@ -268,8 +287,42 @@ func _update_camera_limits() -> void:
 
 
 func _spawn_enemies() -> void:
-	var count: int = mini(6 + raid * 2, 20)
+	var count: int = mini(12 + raid * 3, 36)
 	enemies_alive = count
+	var pool := _enemy_pool()
+	var centers: Array[Vector2] = []
+	var spawned := 0
+	var pack_id := 0
+	while spawned < count:
+		# 主族只决定这一群的规模和“气质”，成员是混编的。
+		var leader: String = pool.pick_random()
+		var limits: Array = PACK_SIZE.get(leader, [3, 5])
+		var size: int = mini(randi_range(int(limits[0]), int(limits[1])), count - spawned)
+		var center := _pick_pack_center(centers)
+		centers.append(center)
+		for kind in _pack_members(leader, size, pool):
+			_spawn_enemy(kind, center, pack_id)
+		pack_id += 1
+		spawned += size
+
+
+## 群落成员：主族占多数，但每群至少掺进一只别的种类，形成混编小队。
+func _pack_members(leader: String, size: int, pool: Array[String]) -> Array[String]:
+	var others: Array[String] = []
+	for entry in pool:
+		if entry != leader and not others.has(entry):
+			others.append(entry)
+
+	var kinds: Array[String] = [leader]
+	for i in range(1, size):
+		# 第二只固定换族，保证“一群多类”；其余按比例掺。
+		var use_other := not others.is_empty() and (i == 1 or randf() >= PACK_LEADER_RATIO)
+		kinds.append(others.pick_random() if use_other else leader)
+	return kinds
+
+
+## 本局能刷的怪：数组里重复几次就是几份权重。
+func _enemy_pool() -> Array[String]:
 	var pool: Array[String] = ["goblin", "goblin", "skelet"]
 	if raid >= 2:
 		pool.append_array(["skelet", "chort"])
@@ -277,18 +330,42 @@ func _spawn_enemies() -> void:
 		pool.append("chort")
 	if raid % 3 == 0:
 		pool.append("ogre")
+	return pool
 
-	for i in count:
-		var kind: String = pool.pick_random()
-		var enemy := ENEMY_SCENE.instantiate() as Enemy
-		enemy.kind = kind
-		enemy.tier = raid
-		enemy.player = player
-		actors.add_child(enemy)
-		# 前两只保证在视野附近，剩下的散落在房间各处。
-		var min_distance := 110.0 if i < 2 else 150.0
-		enemy.global_position = dungeon.random_floor_point(min_distance, 2)
-		enemy.died.connect(_on_enemy_died)
+
+## 群落中心：离玩家至少 PACK_MIN_FROM_PLAYER，并在几个候选里挑离已有群落最远的。
+func _pick_pack_center(others: Array[Vector2]) -> Vector2:
+	var best := dungeon.random_floor_point(PACK_MIN_FROM_PLAYER, 3)
+	var best_gap := _nearest_gap(best, others)
+	for attempt in 8:
+		var point := dungeon.random_floor_point(PACK_MIN_FROM_PLAYER, 3)
+		var gap := _nearest_gap(point, others)
+		if gap > best_gap:
+			best = point
+			best_gap = gap
+		if gap >= PACK_SPACING:
+			break
+	return best
+
+
+func _nearest_gap(point: Vector2, others: Array[Vector2]) -> float:
+	var gap := 9999.0
+	for other in others:
+		gap = minf(gap, point.distance_to(other))
+	return gap
+
+
+## 群落成员：以中心为原点散开，落点必须是空地；出生点就是它自己的位置。
+func _spawn_enemy(kind: String, center: Vector2, pack_id: int) -> void:
+	var enemy := ENEMY_SCENE.instantiate() as Enemy
+	enemy.kind = kind
+	enemy.tier = raid
+	enemy.pack_id = pack_id
+	enemy.player = player
+	actors.add_child(enemy)
+	enemy.global_position = dungeon.floor_point_near(center, PACK_SCATTER)
+	enemy.set_home(enemy.global_position)
+	enemy.died.connect(_on_enemy_died)
 
 
 func _on_enemy_died(enemy: Node) -> void:

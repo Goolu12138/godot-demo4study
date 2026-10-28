@@ -27,6 +27,25 @@ var _door_cache: Dictionary = {}
 var _ui_font: Font
 
 
+# ---------------------------------------------------------------- 噪音总线
+## 听觉只看距离、不看视线：墙后的脚步听得到，但传不远。
+## 玩家挥剑 / 开门 / 走动会调 emit_noise()，enemy.gd 监听这个信号决定要不要过来查看。
+## 半径单位是像素，约等于“隔几堵墙还能听见”。
+
+signal noise_emitted(position: Vector2, radius: float, kind: String)
+
+const NOISE_WALK := 70.0
+const NOISE_DASH := 130.0
+const NOISE_ATTACK := 190.0
+const NOISE_DOOR := 240.0
+
+
+func emit_noise(at: Vector2, radius: float, kind := "generic") -> void:
+	if radius <= 0.0:
+		return
+	noise_emitted.emit(at, radius, kind)
+
+
 func _ready() -> void:
 	_setup_input()
 	_load_tile_list()
