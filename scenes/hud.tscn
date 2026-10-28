@@ -165,12 +165,10 @@ theme_override_font_sizes/font_size = 16
 text = "BACKPACK"
 horizontal_alignment = 1
 
-[node name="Slots" type="GridContainer" parent="Root/Bag/Panel/Box"]
+[node name="Grid" type="CenterContainer" parent="Root/Bag/Panel/Box"]
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/h_separation = 6
-theme_override_constants/v_separation = 6
-columns = 3
+mouse_filter = 2
 
 [node name="Hint" type="Label" parent="Root/Bag/Panel/Box"]
 layout_mode = 2

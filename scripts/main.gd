@@ -1,11 +1,11 @@
 extends Node2D
-## 搜打撤循环：穿过三张固定地图，在限时内找到随机刷新的撤离梯离开。
+## 搜打撤循环：在一张由三间房拼接的大地图里搜索，在限时内找到随机刷新的撤离梯离开。
 ##
 ## 规则：
-##   - 贵重品只记估值，装备先放进 6 格背包，两者都要成功撤离才结算；
-##   - 三张图用顶墙的门依次连接，门一直是开的，不要求清怪；
+##   - 所有战利品都放进格子背包（贵重品 / 武器 / 护甲体积不同），都要成功撤离才结算；
+##   - 三间房用门连接，门可以开关，不要求清怪；
 ##   - 怪物的种类与位置每局随机，可以打也可以绕；
-##   - 死亡 / 倒计时归零 / 主动放弃：背包清空，身上的武器与护甲一起丢失；
+##   - 死亡 / 倒计时归零 / 主动放弃：背包清空，身上的非默认武器与护甲一起丢失；
 ##   - 撤离或死亡后自动回到休息处，仓库在那边。
 
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
@@ -19,15 +19,12 @@ const EXTRACTION_START_TIME := 7.0 * 60.0
 const EXTRACTION_SPAWN_MIN := 15.0
 const EXTRACTION_SPAWN_MAX := 25.0
 
-## 背包只装装备，格子满了必须丢一件才能捡新的。
-const BAG_SIZE := 6
-
-## 贵重品：直接折算成撤离时的金币。
+## 贵重品：撤离时折算成金币；体积各不相同，一样占用背包格子。
 const VALUE_TABLE := [
-	{"id": "coins", "value": 5, "tex": "coin_anim_f0", "weight": 50},
-	{"id": "potion", "value": 15, "tex": "flask_big_red", "weight": 28},
-	{"id": "relic", "value": 30, "tex": "flask_big_blue", "weight": 15},
-	{"id": "idol", "value": 60, "tex": "skull", "weight": 7},
+	{"id": "coins", "value": 5, "tex": "coin_anim_f0", "weight": 50, "w": 1, "h": 1},
+	{"id": "potion", "value": 15, "tex": "flask_big_red", "weight": 28, "w": 2, "h": 2},
+	{"id": "relic", "value": 30, "tex": "flask_big_blue", "weight": 15, "w": 3, "h": 1},
+	{"id": "idol", "value": 60, "tex": "skull", "weight": 7, "w": 3, "h": 2},
 ]
 
 ## 装备掉落：越深的 RAID 越容易掉高阶货。
@@ -48,8 +45,8 @@ var player: Player
 var raid := 1
 var loot_value := 0
 var loot_count := 0
-## 背包内容：[{kind, id, name, tex, bonus, bonus_text}]
-var bag: Array[Dictionary] = []
+## 格子背包：容量由 Meta.backpack 决定。
+var bag: GridInventory = null
 var bag_open := false
 var time_left := RUN_TIME
 ## playing / moving / extracting / dead / ended
@@ -221,7 +218,7 @@ func _start_run() -> void:
 	loot_count = 0
 	_extraction_spawn_cd = 0.0
 	_extraction_spawned = 0
-	bag.clear()
+	bag = GridInventory.new(Meta.bag_cols(), Meta.bag_rows())
 	bag_open = false
 	time_left = RUN_TIME
 	state = "playing"
@@ -229,7 +226,7 @@ func _start_run() -> void:
 	hud.close_bag()
 	hud.hide_end()
 	hud.set_loot(loot_count, loot_value)
-	hud.set_bag(0, BAG_SIZE)
+	hud.set_bag(0, bag.capacity_cells())
 	hud.set_timer(time_left)
 	hud.set_coins(Meta.gold)
 	hud.fade_to(0.0, 0.45)
@@ -316,11 +313,11 @@ func _search() -> void:
 	var at: Vector2 = result.pos
 	for i in int(result.rolls):
 		var item := _roll_loot_item()
-		if item.kind == "valuable":
-			gold_gain += int(item.value)
-			_stow(item, at)
-		elif _stow(item, at):
-			gear_gain += 1
+		if _stow(item, at):
+			if item.kind == "valuable":
+				gold_gain += int(item.value)
+			else:
+				gear_gain += 1
 		else:
 			dropped += 1
 	var parts: Array[String] = []
@@ -335,34 +332,28 @@ func _search() -> void:
 	hud.message("   ·   ".join(PackedStringArray(parts)), 1.4)
 
 
-## 贵重品直接入账；装备优先放背包，放不下就掉在脚边。
+## 所有战利品都先找格子；放不下就掉在脚边（贵重品也一样）。
 func _stow(item: Dictionary, at: Vector2) -> bool:
+	if not bag.auto_place(item):
+		_spawn_item(at + Vector2(randf_range(-16.0, 16.0), 4.0), item)
+		return false
 	if item.kind == "valuable":
 		loot_value += int(item.value)
 		loot_count += 1
 		hud.set_loot(loot_count, loot_value)
-		hud.pulse_loot()
-		return true
-	if bag.size() < BAG_SIZE:
-		bag.append(item)
-		hud.set_bag(bag.size(), BAG_SIZE)
-		hud.pulse_loot()
-		return true
-	_spawn_item(at + Vector2(randf_range(-16.0, 16.0), 4.0), item)
-	return false
+	hud.set_bag(bag.used_cells(), bag.capacity_cells())
+	hud.pulse_loot()
+	return true
 
 
 func _collect_item(item: Dictionary) -> bool:
+	if not bag.auto_place(item):
+		return false
 	if item.kind == "valuable":
 		loot_value += int(item.value)
 		loot_count += 1
 		hud.set_loot(loot_count, loot_value)
-		hud.pulse_loot()
-		return true
-	if bag.size() >= BAG_SIZE:
-		return false
-	bag.append(item)
-	hud.set_bag(bag.size(), BAG_SIZE)
+	hud.set_bag(bag.used_cells(), bag.capacity_cells())
 	hud.pulse_loot()
 	return true
 
@@ -402,8 +393,10 @@ func _roll_valuable() -> Dictionary:
 				"name": str(entry.id).to_upper(),
 				"value": int(entry.value),
 				"tex": str(entry.tex),
+				"w": int(entry.w),
+				"h": int(entry.h),
 			}
-	return {"kind": "valuable", "id": "coins", "name": "COINS", "value": 5, "tex": "coin_anim_f0"}
+	return {"kind": "valuable", "id": "coins", "name": "COINS", "value": 5, "tex": "coin_anim_f0", "w": 1, "h": 1}
 
 
 func _roll_gear() -> Dictionary:
@@ -425,47 +418,46 @@ func _roll_gear() -> Dictionary:
 
 
 func _make_gear_item(kind: String, id: String) -> Dictionary:
-	var bonus := Meta.gear_bonus(kind, id)
-	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
-	return {
-		"kind": kind,
-		"id": id,
-		"name": Loc.gear_name(id),
-		"tex": Meta.gear_texture(kind, id),
-		"bonus": bonus,
-		"bonus_text": Loc.t("gear_desc") % [bonus, unit],
-	}
+	return Meta.make_gear_item(kind, id)
 
 
 # ---------------------------------------------------------------- 背包
 
 ## 测试与事件用的入口：放得下就进背包。
 func add_gear_to_bag(kind: String, id: String) -> bool:
-	if bag.size() >= BAG_SIZE:
+	var item := Meta.make_gear_item(kind, id)
+	if item.is_empty() or not bag.auto_place(item):
 		return false
-	bag.append(_make_gear_item(kind, id))
-	hud.set_bag(bag.size(), BAG_SIZE)
+	hud.set_bag(bag.used_cells(), bag.capacity_cells())
 	hud.pulse_loot()
 	return true
 
 
 func drop_bag_item(index: int) -> void:
-	if index < 0 or index >= bag.size():
+	if index < 0 or index >= bag.items.size():
 		return
-	var item := bag[index]
-	bag.remove_at(index)
-	hud.set_bag(bag.size(), BAG_SIZE)
-	hud.open_bag(bag)
-	hud.message(Loc.t("msg_dropped") % Loc.t("gear_" + str(item.id)), 1.0)
+	var item := bag.remove_at(index)
+	if item.is_empty():
+		return
+	hud.set_bag(bag.used_cells(), bag.capacity_cells())
+	hud.open_bag(bag, _bag_tier_name())
+	var label := str(item.get("name", item.get("id", "?")))
+	if str(item.get("kind", "")) != "valuable":
+		label = Loc.gear_name(str(item.get("id", "")))
+	hud.message(Loc.t("msg_dropped") % label, 1.0)
 
 
 func _toggle_bag() -> void:
 	bag_open = not bag_open
 	player.control_enabled = not bag_open
 	if bag_open:
-		hud.open_bag(bag)
+		hud.open_bag(bag, _bag_tier_name())
 	else:
 		hud.close_bag()
+
+
+func _bag_tier_name() -> String:
+	return Loc.t("pack_" + Meta.backpack)
 
 
 # ---------------------------------------------------------------- 撤离 / 失败
@@ -480,13 +472,16 @@ func _extract() -> void:
 	player.control_enabled = false
 	_set_hint("")
 	var gained := loot_value
-	var gear: Array = bag.duplicate()
-	var stored := bag.size()
+	var gear: Array = []
+	for item in bag.items:
+		if str(item.get("kind", "")) != "valuable":
+			gear.append(item)
+	var stored := gear.size()
 	var punished := _penalties_enabled()
 	if punished:
-		Meta.finish_extraction(gained, gear)
+		stored = Meta.finish_extraction(gained, gear)
 		bag.clear()
-		hud.set_bag(0, BAG_SIZE)
+		hud.set_bag(0, bag.capacity_cells())
 		hud.set_loot(0, 0)
 	hud.set_coins(Meta.gold)
 	hud.fade_to(0.55, 0.25)
@@ -515,12 +510,12 @@ func _fail(reason: String) -> void:
 		hud.close_bag()
 	player.control_enabled = false
 	var lost := loot_value
-	var lost_gear := bag.size()
+	var lost_gear := bag.items.size()
 	var punished := _penalties_enabled()
 	if punished:
 		Meta.lose_gear()
 		bag.clear()
-		hud.set_bag(0, BAG_SIZE)
+		hud.set_bag(0, bag.capacity_cells())
 		Meta.record_result(Loc.t("result_lost") % [reason, lost, lost_gear])
 	hud.message("", 0.0)
 	hud.set_enemies(-1)

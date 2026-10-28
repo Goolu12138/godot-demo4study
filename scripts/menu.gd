@@ -36,7 +36,10 @@ var _shop_title: Label
 var _shop_gold: Label
 var _shop_box: VBoxContainer
 var _stash_panel: Control
-var _stash_box: VBoxContainer
+var _stash_scroll: ScrollContainer
+var _stash_view: GridInventoryView
+var _stash_usage: Label
+var _stash_hint: Label
 var _stash_loadout: Label
 var _settings_panel: Control
 var _settings_box: VBoxContainer
@@ -369,8 +372,9 @@ func _refresh_shop() -> void:
 		_shop_box.add_child(_label(Loc.t("skills_soon"), 8, MUTED, 1))
 
 	if _shop_scope != "upgrades":
-		_add_section(Loc.t("storage"))
-		_add_storage_row()
+		_add_section(Loc.t("backpacks"))
+		for id in Meta.BACKPACKS:
+			_add_backpack_row(str(id))
 
 		_add_section(Loc.t("sell"))
 		var sellables := 0
@@ -390,34 +394,62 @@ func _refresh_shop() -> void:
 			_add_gear_row("armor", str(id), Meta.ARMORS[id])
 
 
-func _add_storage_row() -> void:
+func _add_backpack_row(id: String) -> void:
+	var definition: Dictionary = Meta.BACKPACKS[id]
 	var row := HBoxContainer.new()
 	row.custom_minimum_size = Vector2(0, 38)
 	row.add_theme_constant_override("separation", 10)
 	_shop_box.add_child(row)
 
+	var icon := TextureRect.new()
+	icon.texture = Game.tex("chest_full_open_anim_f0")
+	icon.custom_minimum_size = Vector2(20, 20)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(icon)
+
 	var texts := VBoxContainer.new()
 	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	texts.add_theme_constant_override("separation", 0)
 	row.add_child(texts)
+	texts.add_child(_label(Loc.t("pack_" + id), 10, CREAM, 2))
+	texts.add_child(_label(Loc.t("pack_size") % [int(definition.cols), int(definition.rows)],
+		8, MUTED, 1))
 
-	texts.add_child(_label("%s   %d" % [Loc.t("storage"), Meta.stash_capacity], 10, CREAM, 2))
-	texts.add_child(_label(Loc.t("storage_desc") % Meta.STASH_STEP, 8, MUTED, 1))
+	var button := Button.new()
+	button.custom_minimum_size = Vector2(88, 30)
+	button.focus_mode = Control.FOCUS_NONE
+	if Meta.backpack == id:
+		button.text = Loc.t("equipped")
+		button.disabled = true
+	elif Meta.owns_backpack(id):
+		button.text = Loc.t("equip")
+		button.pressed.connect(_equip_backpack.bind(id))
+	else:
+		var cost := int(definition.cost)
+		button.text = "%d G" % cost
+		button.disabled = Meta.gold < cost
+		button.pressed.connect(_buy_backpack.bind(id))
+	row.add_child(button)
 
-	var cost := Meta.next_stash_cost()
-	var buy := Button.new()
-	buy.custom_minimum_size = Vector2(88, 30)
-	buy.focus_mode = Control.FOCUS_NONE
-	buy.text = Loc.t("max") if cost < 0 else "%d G" % cost
-	buy.disabled = cost < 0 or Meta.gold < cost
-	buy.pressed.connect(_buy_storage)
-	row.add_child(buy)
 
-
-func _buy_storage() -> void:
-	if Meta.upgrade_stash():
-		_flash(Loc.t("purchased") % Loc.t("storage"), Color("#8fd18a"))
+func _buy_backpack(id: String) -> void:
+	if Meta.buy_backpack(id):
+		_flash(Loc.t("purchased") % Loc.t("pack_" + id), Color("#8fd18a"))
+	else:
+		_flash(Loc.t("not_enough"))
 	_refresh_shop()
+	_refresh_stash()
+	_refresh_heroes()
+
+
+func _equip_backpack(id: String) -> void:
+	if Meta.equip_backpack(id):
+		_flash(Loc.t("equipped_msg") % Loc.t("pack_" + id), Color("#8fd18a"))
+	_refresh_shop()
+	_refresh_stash()
 
 
 func _add_sell_row(kind: String, id: String) -> void:
@@ -519,7 +551,9 @@ func _add_gear_row(kind: String, id: String, definition: Dictionary) -> void:
 	row.add_child(texts)
 	texts.add_child(_label(Loc.gear_name(id), 9, CREAM, 2))
 	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
-	texts.add_child(_label(Loc.t("gear_desc") % [int(definition.bonus), unit], 7, MUTED, 1))
+	var size := Meta.gear_size(kind, id)
+	texts.add_child(_label("%s   ·   %d×%d" % [Loc.t("gear_desc") % [int(definition.bonus), unit],
+		size.x, size.y], 7, MUTED, 1))
 
 	var equipped: String = Meta.weapon if kind == "weapon" else Meta.armor
 	var cost := int(definition.cost)
@@ -594,6 +628,8 @@ func close_all() -> void:
 		_shop_panel.visible = false
 	if _stash_panel != null:
 		_stash_panel.visible = false
+	if _stash_view != null:
+		_stash_view._cancel_interaction()
 	if _settings_panel != null:
 		_settings_panel.visible = false
 
@@ -618,12 +654,12 @@ func _build_stash() -> void:
 	_stash_panel.add_child(shade)
 
 	var panel := PanelContainer.new()
-	panel.position = Vector2(150, 28)
-	panel.custom_minimum_size = Vector2(340, 0)
+	panel.position = Vector2(20, 6)
+	panel.custom_minimum_size = Vector2(600, 0)
 	_stash_panel.add_child(panel)
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
+	box.add_theme_constant_override("separation", 6)
 	panel.add_child(box)
 
 	var header := HBoxContainer.new()
@@ -638,22 +674,24 @@ func _build_stash() -> void:
 	header.add_child(_stash_loadout)
 
 	var separator := HSeparator.new()
-	separator.add_theme_constant_override("separation", 6)
+	separator.add_theme_constant_override("separation", 4)
 	box.add_child(separator)
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 200)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	box.add_child(scroll)
+	_stash_usage = _label("", 9, MUTED, 2)
+	box.add_child(_stash_usage)
 
-	_stash_box = VBoxContainer.new()
-	_stash_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_stash_box.add_theme_constant_override("separation", 6)
-	scroll.add_child(_stash_box)
+	_stash_scroll = ScrollContainer.new()
+	_stash_scroll.custom_minimum_size = Vector2(560, 200)
+	_stash_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_stash_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	box.add_child(_stash_scroll)
+
+	_stash_hint = _label(Loc.t("stash_hint"), 8, MUTED, 1)
+	box.add_child(_stash_hint)
 
 	var close := Button.new()
 	close.text = Loc.t("close")
-	close.custom_minimum_size = Vector2(0, 34)
+	close.custom_minimum_size = Vector2(0, 32)
 	close.focus_mode = Control.FOCUS_NONE
 	close.pressed.connect(_close_stash)
 	box.add_child(close)
@@ -662,65 +700,51 @@ func _build_stash() -> void:
 func _refresh_stash() -> void:
 	if _stash_panel == null:
 		return
-	_stash_loadout.text = "%s  ·  %s%s" % [Loc.gear_name(Meta.weapon), Loc.gear_name(Meta.armor),
-		Loc.t("stash_slots") % [Meta.stash_used(), Meta.stash_capacity]]
-	for child in _stash_box.get_children():
-		_stash_box.remove_child(child)
-		child.queue_free()
+	_stash_loadout.text = "%s  ·  %s  ·  %s %d×%d" % [
+		Loc.gear_name(Meta.weapon), Loc.gear_name(Meta.armor),
+		Loc.t("pack_" + Meta.backpack), Meta.bag_cols(), Meta.bag_rows()]
+	_stash_usage.text = Loc.t("stash_cells") % [Meta.stash_used(), Meta.stash_capacity()]
+	_stash_hint.text = Loc.t("stash_hint")
 
-	_add_stash_section(Loc.t("weapons"), "weapon")
-	_add_stash_section(Loc.t("armors"), "armor")
-
-
-func _add_stash_section(title: String, kind: String) -> void:
-	_stash_box.add_child(_label(title, 10, GOLD, 3))
-	var counts := Meta.stash_counts(kind)
-	var ids: Array[String] = [Meta.default_gear(kind)]
-	for id in counts:
-		if not ids.has(id):
-			ids.append(str(id))
-	ids.sort_custom(func(a, b): return Meta.gear_bonus(kind, a) > Meta.gear_bonus(kind, b))
-	for id in ids:
-		_add_stash_row(kind, id, int(counts.get(id, 0)))
+	if _stash_view == null:
+		_stash_view = GridInventoryView.new()
+		_stash_view.item_clicked.connect(_on_stash_item_clicked)
+		_stash_view.item_hovered.connect(_on_stash_hover)
+		_stash_view.item_moved.connect(_on_stash_item_moved)
+		_stash_scroll.add_child(_stash_view)
+	_stash_view.set_inventory(Meta.stash, 8, _equipped_highlights())
 
 
-func _add_stash_row(kind: String, id: String, looted: int) -> void:
-	var row := HBoxContainer.new()
-	row.custom_minimum_size = Vector2(0, 32)
-	row.add_theme_constant_override("separation", 8)
-	_stash_box.add_child(row)
+func _on_stash_hover(index: int) -> void:
+	if index < 0 or index >= Meta.stash.items.size():
+		_stash_hint.text = Loc.t("stash_hint")
+		return
+	_stash_hint.text = _stash_view.item_summary(index) + Loc.t("stash_click_equip")
 
-	var icon := TextureRect.new()
-	icon.texture = Game.tex(Meta.gear_texture(kind, id))
-	icon.custom_minimum_size = Vector2(20, 20)
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(icon)
 
-	var texts := VBoxContainer.new()
-	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	texts.add_theme_constant_override("separation", 0)
-	row.add_child(texts)
-	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
-	var count := Meta.owned_count(kind, id)
-	var suffix := "" if count <= 1 else "   x%d" % count
-	texts.add_child(_label("%s%s" % [Loc.gear_name(id), suffix], 9, CREAM, 2))
-	var tag := "   ·   " + (Loc.t("looted") if looted > 0 else Loc.t("default_gear"))
-	texts.add_child(_label(Loc.t("gear_desc") % [Meta.gear_bonus(kind, id), unit] + tag, 7, MUTED, 1))
+## 拖动只改变仓库里的格子坐标，立即保存，避免退出营地后布局丢失。
+func _on_stash_item_moved(_index: int) -> void:
+	Meta.save_data()
+	_stash_hint.text = Loc.t("stash_hint")
 
-	var equipped: String = Meta.weapon if kind == "weapon" else Meta.armor
-	var button := Button.new()
-	button.custom_minimum_size = Vector2(84, 26)
-	button.focus_mode = Control.FOCUS_NONE
-	if id == equipped:
-		button.text = Loc.t("equipped")
-		button.disabled = true
-	else:
-		button.text = Loc.t("equip")
-		button.pressed.connect(_equip_gear.bind(kind, id))
-	row.add_child(button)
+
+## 已装备的物品在仓库格子里描金边（默认装备不在仓库里）。
+func _equipped_highlights() -> Dictionary:
+	var result := {}
+	if Meta.weapon != Meta.DEFAULT_WEAPON:
+		result["weapon:" + Meta.weapon] = true
+	if Meta.armor != Meta.DEFAULT_ARMOR:
+		result["armor:" + Meta.armor] = true
+	return result
+
+
+func _on_stash_item_clicked(index: int) -> void:
+	if index < 0 or index >= Meta.stash.items.size():
+		return
+	var item: Dictionary = Meta.stash.items[index]
+	var kind := str(item.get("kind", ""))
+	if kind == "weapon" or kind == "armor":
+		_equip_gear(kind, str(item.get("id", "")))
 
 
 func _equip_gear(kind: String, id: String) -> void:
@@ -742,6 +766,8 @@ func _open_stash() -> void:
 func _close_stash() -> void:
 	if _stash_panel != null:
 		_stash_panel.visible = false
+	if _stash_view != null:
+		_stash_view._cancel_interaction()
 
 
 # ---------------------------------------------------------------- 设置

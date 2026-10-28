@@ -5,8 +5,6 @@ class_name GameHud
 
 signal bag_drop(index: int)
 
-const BAG_CAPACITY := 6
-
 @onready var hearts: HBoxContainer = $Root/Hearts
 @onready var coin_icon: TextureRect = $Root/Coin/CoinIcon
 @onready var coin_label: Label = $Root/Coin/CoinLabel
@@ -21,14 +19,19 @@ const BAG_CAPACITY := 6
 @onready var death: Control = $Root/Death
 @onready var bag_panel: Control = $Root/Bag
 @onready var bag_box: VBoxContainer = $Root/Bag/Panel/Box
-@onready var bag_slots: GridContainer = $Root/Bag/Panel/Box/Slots
+@onready var bag_grid: CenterContainer = $Root/Bag/Panel/Box/Grid
+@onready var bag_title: Label = $Root/Bag/Panel/Box/Title
+@onready var bag_hint: Label = $Root/Bag/Panel/Box/Hint
 
+var bag_view: GridInventoryView
+var _bag_menu: PopupMenu
+var _bag_menu_index := -1
 var _message_tween: Tween
 var _fade_tween: Tween
 var _loot_count := 0
 var _loot_value := 0
 var _bag_count := 0
-var _bag_max := BAG_CAPACITY
+var _bag_max := 1
 
 
 func _ready() -> void:
@@ -42,11 +45,12 @@ func _ready() -> void:
 	depth_label.text = Loc.t("raid") % 1
 	enemies_label.text = ""
 	hint_label.text = Loc.t("hint_play")
-	($Root/Bag/Panel/Box/Title as Label).text = Loc.t("backpack")
+	bag_title.text = Loc.t("backpack")
 	($Root/Bag/Panel/Box/Hint as Label).text = Loc.t("bag_hint")
 	_style_bag_panel()
+	_ensure_bag_view()
 	set_loot(0, 0)
-	set_bag(0, BAG_CAPACITY)
+	set_bag(0, 1)
 	set_timer(900.0)
 
 
@@ -94,10 +98,10 @@ func set_loot(count: int, value: int) -> void:
 	_refresh_status()
 
 
-## 背包只装装备，容量固定。
+## 背包占用按“格”算，不是按件数。
 func set_bag(count: int, capacity: int) -> void:
 	_bag_count = count
-	_bag_max = capacity
+	_bag_max = maxi(1, capacity)
 	_refresh_status()
 
 
@@ -164,66 +168,112 @@ func is_bag_open() -> bool:
 	return bag_panel.visible
 
 
-## items 是 main.bag（装备字典数组）。点哪一格就丢掉哪一格。
-func open_bag(items: Array) -> void:
-	for child in bag_slots.get_children():
-		bag_slots.remove_child(child)
-		child.queue_free()
-	for i in BAG_CAPACITY:
-		bag_slots.add_child(_make_bag_slot(i, items[i] if i < items.size() else {}))
+func _ensure_bag_view() -> void:
+	if bag_view != null:
+		return
+	bag_view = GridInventoryView.new()
+	bag_view.item_right_clicked.connect(_on_bag_item_right_clicked)
+	bag_view.item_hovered.connect(_on_bag_item_hovered)
+	bag_view.item_moved.connect(_on_bag_item_moved)
+	bag_grid.add_child(bag_view)
+
+
+func _ensure_bag_menu() -> void:
+	if _bag_menu != null:
+		return
+	_bag_menu = PopupMenu.new()
+	_bag_menu.name = "BagMenu"
+	_bag_menu.add_theme_font_override("font", Game.ui_font())
+	_bag_menu.add_theme_font_size_override("font_size", 10)
+	_bag_menu.add_theme_color_override("font_color", Color("#f3e3c3"))
+	_bag_menu.add_theme_color_override("font_hover_color", Color("#1a1014"))
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.07, 0.05, 0.08, 0.98)
+	panel_style.border_color = Color("#6b4632")
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(2)
+	panel_style.content_margin_left = 8.0
+	panel_style.content_margin_right = 8.0
+	panel_style.content_margin_top = 6.0
+	panel_style.content_margin_bottom = 6.0
+	_bag_menu.add_theme_stylebox_override("panel", panel_style)
+	var hover_style := StyleBoxFlat.new()
+	hover_style.bg_color = Color("#e8b563")
+	hover_style.set_corner_radius_all(2)
+	_bag_menu.add_theme_stylebox_override("hover", hover_style)
+	_bag_menu.add_theme_constant_override("item_start_padding", 10)
+	_bag_menu.add_theme_constant_override("item_end_padding", 10)
+	_bag_menu.add_theme_constant_override("v_separation", 5)
+	_bag_menu.add_item(Loc.t("discard"), 0)
+	_bag_menu.id_pressed.connect(_on_bag_menu_pressed)
+	$Root.add_child(_bag_menu)
+
+
+## inventory 是 main.bag（带 x / y / w / h 的字典数组）；左键拖动换位，右键弹菜单。
+func open_bag(inventory: GridInventory, tier := "") -> void:
+	if inventory == null:
+		return
+	_hide_bag_menu()
+	_ensure_bag_view()
+	bag_view.set_inventory(inventory, 8)
+	bag_hint.text = Loc.t("bag_hint")
+	set_bag(inventory.used_cells(), inventory.capacity_cells())
+
+	bag_title.text = Loc.t("backpack") if tier == "" else "%s  ·  %s" % [Loc.t("backpack"), tier]
+	var panel := $Root/Bag/Panel as PanelContainer
+	var panel_width := maxf(300.0, float(inventory.cols * 8 + 40))
+	var panel_height := float(inventory.rows * 8 + 96)
+	panel.offset_left = -panel_width * 0.5
+	panel.offset_right = panel_width * 0.5
+	panel.offset_top = -panel_height * 0.5
+	panel.offset_bottom = panel_height * 0.5
 	bag_panel.visible = true
 
 
 func close_bag() -> void:
+	_hide_bag_menu()
+	if bag_view != null:
+		bag_view._cancel_interaction()
 	bag_panel.visible = false
 
 
-func _make_bag_slot(index: int, item: Dictionary) -> Button:
-	var button := Button.new()
-	button.custom_minimum_size = Vector2(100, 56)
-	button.focus_mode = Control.FOCUS_NONE
-	button.add_theme_font_size_override("font_size", 8)
-	if item.is_empty():
-		button.text = Loc.t("empty")
-		button.disabled = true
-		button.add_theme_color_override("font_disabled_color", Color(0.4, 0.36, 0.42, 1))
-		return button
-
-	button.pressed.connect(_on_bag_slot.bind(index))
-	var icon := TextureRect.new()
-	icon.texture = Game.tex(str(item.tex))
-	icon.position = Vector2(38, 3)
-	icon.size = Vector2(24, 24)
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	button.add_child(icon)
-
-	var title := Label.new()
-	title.text = str(item.name)
-	title.position = Vector2(0, 29)
-	title.size = Vector2(100, 12)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 7)
-	title.add_theme_color_override("font_color", Color("#f3e3c3"))
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	button.add_child(title)
-
-	var bonus := Label.new()
-	bonus.text = str(item.bonus_text)
-	bonus.position = Vector2(0, 41)
-	bonus.size = Vector2(100, 12)
-	bonus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	bonus.add_theme_font_size_override("font_size", 7)
-	bonus.add_theme_color_override("font_color", Color("#8fd18a"))
-	bonus.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	button.add_child(bonus)
-	return button
+func _on_bag_item_right_clicked(index: int) -> void:
+	if index < 0 or index >= bag_view.items.size():
+		return
+	_ensure_bag_menu()
+	_bag_menu_index = index
+	var view_size := Vector2i(get_viewport().get_visible_rect().size)
+	var menu_size := Vector2i(_bag_menu.get_contents_minimum_size())
+	var pos := Vector2i(get_viewport().get_mouse_position())
+	pos.x = clampi(pos.x, 0, maxi(0, view_size.x - menu_size.x))
+	pos.y = clampi(pos.y, 0, maxi(0, view_size.y - menu_size.y))
+	_bag_menu.popup(Rect2i(pos, Vector2i.ZERO))
 
 
-func _on_bag_slot(index: int) -> void:
-	bag_drop.emit(index)
+func _on_bag_menu_pressed(id: int) -> void:
+	if id != 0:
+		return
+	var index := _bag_menu_index
+	_bag_menu_index = -1
+	if index >= 0 and index < bag_view.items.size():
+		bag_drop.emit(index)
+
+
+func _hide_bag_menu() -> void:
+	if _bag_menu != null:
+		_bag_menu.hide()
+	_bag_menu_index = -1
+
+
+func _on_bag_item_hovered(index: int) -> void:
+	if index < 0 or index >= bag_view.items.size():
+		bag_hint.text = Loc.t("bag_hint")
+		return
+	bag_hint.text = bag_view.item_summary(index) + Loc.t("bag_item_hint")
+
+
+func _on_bag_item_moved(_index: int) -> void:
+	bag_hint.text = Loc.t("bag_hint")
 
 
 # ---------------------------------------------------------------- 结算

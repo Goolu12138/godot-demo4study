@@ -170,7 +170,7 @@ func _build_overlay() -> void:
 
 	_gear = _label("", 9, Color("#c9b79c"), 3)
 	_gear.position = Vector2(10, 28)
-	_gear.size = Vector2(300, 14)
+	_gear.size = Vector2(460, 14)
 	root.add_child(_gear)
 
 	_result = _label("", 9, Color("#8fd18a"), 3)
@@ -257,7 +257,9 @@ func _on_deploy_cancelled() -> void:
 
 func _refresh_status() -> void:
 	_gold.text = Loc.t("hall_gold") % Meta.gold
-	_gear.text = Loc.t("hall_gear") % [Loc.gear_name(Meta.weapon), Loc.gear_name(Meta.armor)]
+	_gear.text = "%s   ·   %s" % [
+		Loc.t("hall_gear") % [Loc.gear_name(Meta.weapon), Loc.gear_name(Meta.armor)],
+		Loc.t("hall_pack") % [Loc.t("pack_" + Meta.backpack), Meta.bag_cols(), Meta.bag_rows()]]
 
 
 func _show_last_result() -> void:
