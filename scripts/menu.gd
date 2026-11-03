@@ -735,6 +735,9 @@ func _equipped_highlights() -> Dictionary:
 		result["weapon:" + Meta.weapon] = true
 	if Meta.armor != Meta.DEFAULT_ARMOR:
 		result["armor:" + Meta.armor] = true
+	for slot in Meta.body_equipment:
+		if Meta.equipped_id(slot) != "":
+			result[slot + ":" + Meta.equipped_id(slot)] = true
 	return result
 
 
@@ -743,7 +746,7 @@ func _on_stash_item_clicked(index: int) -> void:
 		return
 	var item: Dictionary = Meta.stash.items[index]
 	var kind := str(item.get("kind", ""))
-	if kind == "weapon" or kind == "armor":
+	if not Meta.gear_table(kind).is_empty():
 		_equip_gear(kind, str(item.get("id", "")))
 
 

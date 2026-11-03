@@ -46,6 +46,11 @@ const VALUE_TABLE := [
 
 ## 装备掉落：越深的 RAID 越容易掉高阶货。
 const GEAR_TABLE := [
+	{"kind": "head", "id": "iron_helmet", "weight": 8},
+	{"kind": "legs", "id": "leather_leggings", "weight": 8},
+	{"kind": "boots", "id": "leather_boots", "weight": 8},
+	{"kind": "arms", "id": "iron_gauntlets", "weight": 8},
+	{"kind": "ring", "id": "power_ring", "weight": 4},
 	{"kind": "weapon", "id": "knight_sword", "weight": 32},
 	{"kind": "armor", "id": "leather", "weight": 28},
 	{"kind": "weapon", "id": "katana", "weight": 18},
@@ -97,6 +102,9 @@ func _ready() -> void:
 	player.health_changed.connect(_on_health_changed)
 	player.died.connect(_on_player_died)
 	hud.bag_drop.connect(drop_bag_item)
+	hud.potion_use.connect(use_bag_potion)
+	hud.gear_equip.connect(equip_bag_item)
+	hud.backpack_switch.connect(switch_equipped_backpack)
 	_start_run()
 	if "--shot" in OS.get_cmdline_user_args():
 		_capture_after_delay()
@@ -246,6 +254,7 @@ func _start_run() -> void:
 	hud.hide_end()
 	hud.set_loot(loot_count, loot_value)
 	hud.set_bag(0, bag.capacity_cells())
+	hud.refresh_item_slots(bag)
 	hud.set_timer(time_left)
 	hud.set_coins(Meta.gold)
 	hud.fade_to(0.0, 0.45)
@@ -415,10 +424,11 @@ func _stow(item: Dictionary, at: Vector2) -> bool:
 		_spawn_item(at + Vector2(randf_range(-16.0, 16.0), 4.0), item)
 		return false
 	if item.kind == "valuable":
-		loot_value += int(item.value)
-		loot_count += 1
+		loot_value += int(item.value) * int(item.get("quantity", 1))
+		loot_count += int(item.get("quantity", 1))
 		hud.set_loot(loot_count, loot_value)
 	hud.set_bag(bag.used_cells(), bag.capacity_cells())
+	hud.refresh_item_slots(bag)
 	hud.pulse_loot()
 	return true
 
@@ -431,6 +441,7 @@ func _collect_item(item: Dictionary) -> bool:
 		loot_count += 1
 		hud.set_loot(loot_count, loot_value)
 	hud.set_bag(bag.used_cells(), bag.capacity_cells())
+	hud.refresh_item_slots(bag)
 	hud.pulse_loot()
 	return true
 
@@ -506,6 +517,7 @@ func add_gear_to_bag(kind: String, id: String) -> bool:
 	if item.is_empty() or not bag.auto_place(item):
 		return false
 	hud.set_bag(bag.used_cells(), bag.capacity_cells())
+	hud.refresh_item_slots(bag)
 	hud.pulse_loot()
 	return true
 
@@ -517,6 +529,7 @@ func drop_bag_item(index: int) -> void:
 	if item.is_empty():
 		return
 	hud.set_bag(bag.used_cells(), bag.capacity_cells())
+	hud.refresh_item_slots(bag)
 	hud.open_bag(bag, _bag_tier_name())
 	var label := str(item.get("name", item.get("id", "?")))
 	if str(item.get("kind", "")) != "valuable":
@@ -559,6 +572,7 @@ func _extract() -> void:
 		stored = Meta.finish_extraction(gained, gear)
 		bag.clear()
 		hud.set_bag(0, bag.capacity_cells())
+		hud.refresh_item_slots(bag)
 		hud.set_loot(0, 0)
 	hud.set_coins(Meta.gold)
 	hud.fade_to(0.55, 0.25)
@@ -593,6 +607,7 @@ func _fail(reason: String) -> void:
 		Meta.lose_gear()
 		bag.clear()
 		hud.set_bag(0, bag.capacity_cells())
+		hud.refresh_item_slots(bag)
 		Meta.record_result(Loc.t("result_lost") % [reason, lost, lost_gear])
 	hud.message("", 0.0)
 	hud.set_enemies(-1)
@@ -829,3 +844,98 @@ func _diagnose() -> void:
 	for child in dungeon.get_children():
 		print("dungeon child ", child.name, " ", child.get_class())
 	get_tree().quit()
+
+
+func use_bag_potion() -> void:
+	if state != "playing" or player.dead or player.hp >= player.max_hp:
+		return
+	for i in bag.items.size():
+		var item: Dictionary = bag.items[i]
+		if str(item.get("kind", "")) == "valuable" and str(item.get("id", "")) == "potion":
+			var quantity := int(item.get("quantity", 1))
+			if quantity > 1:
+				item["quantity"] = quantity - 1
+			else:
+				bag.remove_at(i)
+			player.heal(2)
+			loot_count = maxi(0, loot_count - 1)
+			loot_value = maxi(0, loot_value - int(item.get("value", 0)))
+			hud.set_loot(loot_count, loot_value)
+			hud.set_bag(bag.used_cells(), bag.capacity_cells())
+			hud.refresh_item_slots(bag)
+			if bag_open:
+				hud.open_bag(bag, _bag_tier_name())
+			return
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if state != "playing" or get_tree().paused or _switch_busy:
+			return
+		var key: int = event.physical_keycode
+		if key >= KEY_1 and key <= KEY_9:
+			hud.activate_quick_slot(key - KEY_1)
+			get_viewport().set_input_as_handled()
+
+
+func equip_bag_item(index: int, kind: String) -> void:
+	if state != "playing" or player.dead or index < 0 or index >= bag.items.size():
+		return
+	var item: Dictionary = bag.items[index]
+	if str(item.get("kind", "")) != kind or not Meta.gear_table(kind).has(str(item.get("id", ""))):
+		return
+	if kind == "backpack":
+		var id := str(item.id)
+		var resized := GridInventory.new(int(Meta.BACKPACKS[id].cols), int(Meta.BACKPACKS[id].rows))
+		for i in bag.items.size():
+			if i != index and not resized.auto_place(bag.items[i].duplicate(true)):
+				hud.message("Not enough backpack space")
+				return
+		if not Meta.owned_backpacks.has(id):
+			Meta.owned_backpacks.append(id)
+		Meta.equip_backpack(id)
+		bag = resized
+		hud.open_bag(bag, _bag_tier_name())
+		return
+	var old_id: String = Meta.equipped_id(kind)
+	var new_id := str(item.id)
+	var trial := GridInventory.new(bag.cols, bag.rows)
+	trial.set_items(bag.items)
+	trial.remove_at(index)
+	if old_id != Meta.default_gear(kind) and not trial.auto_place(Meta.make_gear_item(kind, old_id)):
+		hud.message("No room for replaced equipment")
+		return
+	# Equipped equipment stays represented in Meta.stash for existing save/loss rules.
+	if new_id != Meta.default_gear(kind) and not Meta.stash_add(kind, new_id):
+		return
+	if old_id != Meta.default_gear(kind):
+		Meta.stash_remove_one(kind, old_id)
+	bag.set_items(trial.items)
+	if kind == "weapon":
+		Meta.weapon = new_id
+	elif kind == "armor":
+		Meta.armor = new_id
+	else:
+		Meta.body_equipment[kind] = new_id
+	Meta.save_data()
+	player.damage = Player.BASE_DAMAGE + Meta.upgrade_level("might") + Meta.weapon_bonus()
+	player.max_hp = Player.BASE_MAX_HP + Meta.upgrade_level("vitality") * 2 + Meta.armor_bonus()
+	player.hp = mini(player.hp, player.max_hp)
+	player.sword.texture = Game.tex(Meta.weapon_texture())
+	hud.set_health(player.hp, player.max_hp)
+	hud.open_bag(bag, _bag_tier_name())
+
+
+func switch_equipped_backpack() -> void:
+	if state != "playing" or player.dead:
+		return
+	var next := (Meta.owned_backpacks.find(Meta.backpack) + 1) % Meta.owned_backpacks.size()
+	var id: String = Meta.owned_backpacks[next]
+	var trial := GridInventory.new(int(Meta.BACKPACKS[id].cols), int(Meta.BACKPACKS[id].rows))
+	for item in bag.items:
+		if not trial.auto_place(item.duplicate(true)):
+			hud.message("Not enough backpack space")
+			return
+	Meta.equip_backpack(id)
+	bag = trial
+	hud.open_bag(bag, _bag_tier_name())

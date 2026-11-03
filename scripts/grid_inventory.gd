@@ -70,6 +70,28 @@ func place(item: Dictionary, x: int, y: int) -> bool:
 
 ## 从左上到右下找第一个能放下的位置。
 func auto_place(item: Dictionary) -> bool:
+	var limit := stack_limit(item)
+	if limit <= 1:
+		return _auto_place_single(item)
+	var trial := GridInventory.new(cols, rows)
+	trial.set_items(items)
+	var remaining := maxi(1, int(item.get("quantity", 1)))
+	for stack in trial.items:
+		if str(stack.get("kind", "")) == "valuable" and str(stack.get("id", "")) == str(item.get("id", "")):
+			var added := mini(limit - int(stack.get("quantity", 1)), remaining)
+			stack["quantity"] = int(stack.get("quantity", 1)) + added
+			remaining -= added
+	while remaining > 0:
+		var stack: Dictionary = item.duplicate(true)
+		stack["quantity"] = mini(limit, remaining)
+		if not trial._auto_place_single(stack):
+			return false
+		remaining -= int(stack.quantity)
+	set_items(trial.items.duplicate(true))
+	return true
+
+
+func _auto_place_single(item: Dictionary) -> bool:
 	_normalize(item)
 	var w := int(item.w)
 	var h := int(item.h)
@@ -106,6 +128,19 @@ func remove_at(index: int) -> Dictionary:
 
 ## 把物品拖到 (x, y)；目标被占用时尝试和占用者交换位置。
 func move_item(index: int, x: int, y: int) -> bool:
+	if index >= 0 and index < items.size():
+		var source: Dictionary = items[index]
+		var target_index := item_index_at(x, y, index)
+		if target_index >= 0 and stack_limit(source) > 1:
+			var target: Dictionary = items[target_index]
+			if str(target.get("kind", "")) == "valuable" and str(target.get("id", "")) == str(source.get("id", "")):
+				var moved := mini(int(source.get("quantity", 1)), stack_limit(source) - int(target.get("quantity", 1)))
+				if moved > 0:
+					target["quantity"] = int(target.get("quantity", 1)) + moved
+					source["quantity"] = int(source.get("quantity", 1)) - moved
+					if int(source.quantity) == 0:
+						remove_at(index)
+					return true
 	return _move(index, x, y, true)
 
 
@@ -203,3 +238,11 @@ func _normalize(item: Dictionary) -> void:
 		item["h"] = 1
 	item["w"] = maxi(1, int(item.w))
 	item["h"] = maxi(1, int(item.h))
+
+
+static func stack_limit(item: Dictionary) -> int:
+	if str(item.get("kind", "")) == "valuable":
+		match str(item.get("id", "")):
+			"potion": return 5
+			"coins": return 64
+	return 1

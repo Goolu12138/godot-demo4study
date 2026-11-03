@@ -9,6 +9,8 @@ var _saved := {}
 
 func _ready() -> void:
 	_snapshot()
+	for slot in Meta.body_equipment:
+		Meta.body_equipment[slot] = ""
 	# 结果文案是本地化的，测试固定英文，避免受存档里的语言设置影响。
 	Loc.language = "en"
 	Meta.gold = 0
@@ -32,6 +34,86 @@ func _ready() -> void:
 
 
 func _run() -> void:
+	check(main.hud.equipment_buttons.size() == 8, "eight typed equipment slots around character")
+	check(main.hud.character_preview.sprite_frames != null, "character preview has animation")
+	for kind in Meta.BODY_GEAR:
+		var id: String = Meta.BODY_GEAR[kind].keys()[0]
+		check(main.add_gear_to_bag(kind, id), "new body equipment can enter bag")
+		var before: int = main.bag.items.size()
+		main.equip_bag_item(0, "weapon")
+		check(main.bag.items.size() == before and Meta.equipped_id(kind) == "", "wrong slot leaves equipment unchanged")
+		main.equip_bag_item(0, kind)
+		check(Meta.equipped_id(kind) == id and main.bag.is_empty(), "correct body slot accepts item")
+	check(Meta.armor_bonus() == 4 and Meta.weapon_bonus() == 1, "body equipment bonuses apply")
+	Meta.save_data()
+	Meta.load_data()
+	check(Meta.equipped_id("head") == "iron_helmet" and Meta.equipped_id("ring") == "power_ring", "new equipment survives save reload")
+	Meta.lose_gear()
+	check(Meta.equipped_id("head") == "" and Meta.owned_count("head", "iron_helmet") == 0, "body equipment lost on failure")
+	main.player.damage = Player.BASE_DAMAGE + Meta.upgrade_level("might")
+	main.player.max_hp = Player.BASE_MAX_HP + Meta.upgrade_level("vitality") * 2
+	main.player.hp = main.player.max_hp
+	main.hud.close_bag()
+	main.add_gear_to_bag("backpack", "medium")
+	main.equip_bag_item(0, "backpack")
+	check(Meta.backpack == "medium" and main.bag.cols == 40 and main.bag.is_empty(), "backpack item equips and resizes inventory")
+	main.bag.auto_place({"kind": "valuable", "id": "oversized", "w": 31, "h": 1})
+	main.add_gear_to_bag("backpack", "basic")
+	main.equip_bag_item(1, "backpack")
+	check(Meta.backpack == "medium" and main.bag.items.size() == 2, "smaller backpack rejected without losing items")
+	main.bag.clear()
+	Meta.equip_backpack("basic")
+	main.bag = GridInventory.new(Meta.bag_cols(), Meta.bag_rows())
+	main.hud.close_bag()
+	var coins := {"kind": "valuable", "id": "coins", "value": 5, "w": 1, "h": 1, "quantity": 65}
+	var coin_bag := GridInventory.new(2, 1)
+	check(coin_bag.auto_place(coins), "place 65 coins")
+	check(coin_bag.items.size() == 2 and int(coin_bag.items[0].quantity) == 64 and int(coin_bag.items[1].quantity) == 1, "coin stacks capped at 64")
+	var full_bag := GridInventory.new(1, 1)
+	check(full_bag.auto_place({"kind": "valuable", "id": "coins", "w": 1, "h": 1, "quantity": 63}), "place partial coin stack")
+	check(not full_bag.auto_place({"kind": "valuable", "id": "coins", "w": 1, "h": 1, "quantity": 2}) and int(full_bag.items[0].quantity) == 63, "failed pickup preserves coin quantities")
+	var potion := {"kind": "valuable", "id": "potion", "value": 15, "tex": "flask_big_red", "w": 2, "h": 2}
+	for i in 6:
+		check(main._collect_item(potion.duplicate()), "collect potion")
+	check(main.bag.items.size() == 2, "six potions occupy two stacks")
+	check(int(main.bag.items[0].quantity) == 5 and int(main.bag.items[1].quantity) == 1, "potion stack limit is five")
+	main.use_bag_potion()
+	check(int(main.bag.items[0].quantity) == 5, "full health does not consume")
+	main.player.hp -= 2
+	main.use_bag_potion()
+	check(int(main.bag.items[0].quantity) == 4 and main.loot_value == 75, "consume one potion and reduce value")
+	main.hud.quick_bindings[0] = "potion"
+	main.hud.refresh_item_slots(main.bag)
+	check(main.hud.bottom_bar.is_visible_in_tree(), "quick items visible with backpack closed")
+	check(main.hud.bottom_slots[0].icon != null, "bottom bar mirrors assigned potion")
+	for i in 5:
+		main.player.hp -= 2
+		main.hud.activate_quick_slot(0)
+	check(main.bag.is_empty(), "shortcut consumes final potion")
+	check(main.hud.quick_bindings[0] == "", "empty potion shortcut is removed immediately")
+	check(main.hud.bottom_slots[0].icon == null and main.hud.quick_slots[0].icon == null, "both shortcut views clear icons")
+	main._collect_item(potion.duplicate())
+	check(main.hud.quick_bindings[0] == "", "new potion does not reclaim a cleared shortcut")
+	main.bag.clear()
+	main.loot_count = 0
+	main.loot_value = 0
+	main.add_gear_to_bag("weapon", "katana")
+	main.equip_bag_item(0, "armor")
+	check(Meta.weapon == Meta.DEFAULT_WEAPON and main.bag.items.size() == 1, "wrong slot rejects gear")
+	main.equip_bag_item(0, "weapon")
+	check(Meta.weapon == "katana" and main.bag.is_empty(), "equip from backpack")
+	check(main.player.damage == Player.BASE_DAMAGE + Meta.upgrade_level("might") + 2, "equipped damage updates immediately")
+	main.add_gear_to_bag("weapon", "knight_sword")
+	main.equip_bag_item(0, "weapon")
+	check(Meta.weapon == "knight_sword" and str(main.bag.items[0].id) == "katana", "replaced gear returns to bag")
+	check(Meta.owned_count("weapon", "katana") == 0, "replaced gear is not duplicated in stash")
+	Meta.lose_gear()
+	main.bag.clear()
+	main.player.damage = Player.BASE_DAMAGE + Meta.upgrade_level("might")
+	main.hud.close_bag()
+	main.hud.set_loot(0, 0)
+	main.hud.set_bag(0, main.bag.capacity_cells())
+
 	# Esc 二次确认：先暂停并弹窗，取消后恢复
 	main._request_abandon()
 	check(get_tree().paused, "按 Esc 先暂停并弹出确认")
@@ -258,6 +340,7 @@ func _snapshot() -> void:
 		"best_haul": Meta.best_haul,
 		"weapon": Meta.weapon,
 		"armor": Meta.armor,
+		"body_equipment": Meta.body_equipment.duplicate(),
 		"levels": Meta._levels.duplicate(),
 		"stash": Meta.stash.items.duplicate(true),
 		"backpack": Meta.backpack,
@@ -272,6 +355,7 @@ func _restore() -> void:
 	Meta.best_haul = int(_saved.best_haul)
 	Meta.weapon = str(_saved.weapon)
 	Meta.armor = str(_saved.armor)
+	Meta.body_equipment = _saved.body_equipment.duplicate()
 	Meta._levels = _saved.levels
 	Meta.stash.set_items(_saved.stash)
 	Meta.backpack = str(_saved.backpack)

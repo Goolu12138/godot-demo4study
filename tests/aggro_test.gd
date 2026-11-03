@@ -344,6 +344,7 @@ func _snapshot() -> void:
 		"best_haul": Meta.best_haul,
 		"weapon": Meta.weapon,
 		"armor": Meta.armor,
+		"body_equipment": Meta.body_equipment.duplicate(),
 		"levels": Meta._levels.duplicate(),
 		"stash": Meta.stash.items.duplicate(true),
 		"backpack": Meta.backpack,
@@ -358,6 +359,7 @@ func _restore() -> void:
 	Meta.best_haul = int(_saved.best_haul)
 	Meta.weapon = str(_saved.weapon)
 	Meta.armor = str(_saved.armor)
+	Meta.body_equipment = _saved.body_equipment.duplicate()
 	Meta._levels = _saved.levels
 	Meta.stash.set_items(_saved.stash)
 	Meta.backpack = str(_saved.backpack)

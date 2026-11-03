@@ -7,6 +7,7 @@ signal item_clicked(index: int)
 signal item_right_clicked(index: int)
 signal item_hovered(index: int)
 signal item_moved(index: int)
+signal item_drag_released(index: int, screen_position: Vector2)
 
 const GRID_COLOR := Color(0.24, 0.19, 0.16, 0.9)
 const GRID_MAJOR := Color(0.38, 0.29, 0.22, 0.95)
@@ -19,6 +20,8 @@ const KIND_COLORS := {
 	"armor": Color("#8fd18a"),
 	"valuable": Color("#e8b563"),
 }
+
+var external_drop_test: Callable
 
 var cols := 1
 var rows := 1
@@ -36,6 +39,9 @@ var _dragging := false
 var _drag_index := -1
 var _drag_cell := Vector2i.ZERO
 var _drag_offset := Vector2i.ZERO
+var _drag_layer: CanvasLayer
+var _drag_preview: TextureRect
+var _preview_offset := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -124,14 +130,9 @@ func _draw_drag_ghost() -> void:
 	var valid := inventory.can_move_item(_drag_index, _drag_cell.x, _drag_cell.y)
 	draw_rect(rect, Color(color.r, color.g, color.b, 0.38))
 	draw_rect(rect, Color("#8fd18a") if valid else Color("#e0453c"), false, 2.0)
-	var tex_name := str(item.get("tex", ""))
-	var tex := Game.tex(tex_name) if tex_name != "" else null
-	if tex != null and rect.size.x > 2.0 and rect.size.y > 2.0:
-		draw_texture_rect(tex, _fit_texture(rect.grow(-1.0), tex.get_size()), false,
-			Color(1, 1, 1, 0.82))
 
 
-## 图标按比例缩放到格子内并居中，避免长剑 / 护甲被拉成细条。
+
 func _fit_texture(rect: Rect2, tex_size: Vector2) -> Rect2:
 	if tex_size.x <= 0.0 or tex_size.y <= 0.0:
 		return rect
@@ -186,6 +187,9 @@ func _gui_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not _dragging:
 		return
+	if event is InputEventMouseMotion:
+		_update_drag(get_local_mouse_position())
+		_update_drag_preview()
 	if event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_LEFT and not mouse.pressed:
@@ -225,6 +229,7 @@ func _start_drag() -> void:
 	_drag_offset = _grab_offset
 	var item: Dictionary = items[_drag_index]
 	_drag_cell = Vector2i(int(item.x), int(item.y))
+	_show_drag_preview(item)
 	_hover_index = -1
 	tooltip_text = ""
 	item_hovered.emit(-1)
@@ -254,6 +259,11 @@ func _finish_drag() -> void:
 		_cancel_interaction()
 		return
 	var index := _drag_index
+	if external_drop_test.is_valid() and external_drop_test.call(get_global_mouse_position()):
+		var released := _drag_index
+		_cancel_interaction()
+		item_drag_released.emit(released, get_global_mouse_position())
+		return
 	var target := _drag_cell
 	var inv := inventory
 	_cancel_interaction()
@@ -263,6 +273,9 @@ func _finish_drag() -> void:
 
 
 func _cancel_interaction() -> void:
+	if is_instance_valid(_drag_preview):
+		_drag_preview.hide()
+	queue_redraw()
 	_press_index = -1
 	_dragging = false
 	_drag_index = -1
@@ -299,13 +312,45 @@ func item_summary(index: int) -> String:
 	var id := str(item.get("id", ""))
 	var display := str(item.get("name", id))
 	var detail := str(item.get("bonus_text", ""))
-	if kind == "weapon" or kind == "armor":
+	if not Meta.gear_table(kind).is_empty():
 		display = Loc.gear_name(id)
-		var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
+		var unit := Loc.t("unit_dmg") if kind in ["weapon", "ring"] else Loc.t("unit_hp")
 		detail = Loc.t("gear_desc") % [int(item.get("bonus", 0)), unit]
+	if kind == "backpack":
+		display = Loc.t("pack_" + id)
+		detail = "%d x %d" % [int(Meta.BACKPACKS[id].cols), int(Meta.BACKPACKS[id].rows)]
+	if kind == "valuable" and id in ["relic", "idol"]:
+		display = Loc.t("item_" + id)
+		detail = Loc.t("desc_" + id)
 	var text := "%s   %d×%d" % [display, int(item.get("w", 1)), int(item.get("h", 1))]
+	if int(item.get("quantity", 1)) > 1:
+		text += " x%d / %d" % [int(item.quantity), GridInventory.stack_limit(item)]
 	if detail != "":
 		text += "   ·   " + detail
 	if int(item.get("value", 0)) > 0:
 		text += "   ·   +%d G" % int(item.value)
 	return text
+
+
+# A separate canvas keeps the carried icon above panels and scroll clipping.
+func _show_drag_preview(item: Dictionary) -> void:
+	if not is_instance_valid(_drag_preview):
+		_drag_layer = CanvasLayer.new()
+		_drag_layer.layer = 100
+		add_child(_drag_layer)
+		_drag_preview = TextureRect.new()
+		_drag_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_drag_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_drag_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_drag_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_drag_layer.add_child(_drag_preview)
+	_drag_preview.texture = Game.tex(str(item.get("tex", "")))
+	_drag_preview.size = Vector2(int(item.w) * cell, int(item.h) * cell)
+	_preview_offset = Vector2(_grab_offset) * cell + Vector2(cell, cell) * 0.5
+	_drag_preview.show()
+	_update_drag_preview()
+
+
+func _update_drag_preview() -> void:
+	if is_instance_valid(_drag_preview):
+		_drag_preview.position = get_viewport().get_mouse_position() - _preview_offset

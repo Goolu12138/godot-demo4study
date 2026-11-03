@@ -4,6 +4,17 @@ class_name GameHud
 ## 受击闪红、转场淡入淡出、局内背包面板，以及撤离/死亡共用的结算面板。
 
 signal bag_drop(index: int)
+signal gear_equip(index: int, kind: String)
+signal potion_use
+signal backpack_switch
+var equipment_buttons := {}
+var character_preview: AnimatedSprite2D
+var character_slots: Control
+var quick_slots: Array[Button] = []
+var bottom_slots: Array[Button] = []
+var bottom_bar: HBoxContainer
+var quick_bindings: Array[String] = ["", "", "", "", "", "", "", "", ""]
+var potion_slot: Button
 
 @onready var hearts: HBoxContainer = $Root/Hearts
 @onready var coin_icon: TextureRect = $Root/Coin/CoinIcon
@@ -47,6 +58,7 @@ func _ready() -> void:
 	hint_label.text = Loc.t("hint_play")
 	bag_title.text = Loc.t("backpack")
 	($Root/Bag/Panel/Box/Hint as Label).text = Loc.t("bag_hint")
+	_build_slots()
 	_style_bag_panel()
 	_ensure_bag_view()
 	set_loot(0, 0)
@@ -175,6 +187,8 @@ func _ensure_bag_view() -> void:
 	bag_view.item_right_clicked.connect(_on_bag_item_right_clicked)
 	bag_view.item_hovered.connect(_on_bag_item_hovered)
 	bag_view.item_moved.connect(_on_bag_item_moved)
+	bag_view.item_drag_released.connect(_assign_quick_slot)
+	bag_view.external_drop_test = _is_quick_slot_target
 	bag_grid.add_child(bag_view)
 
 
@@ -215,19 +229,22 @@ func open_bag(inventory: GridInventory, tier := "") -> void:
 		return
 	_hide_bag_menu()
 	_ensure_bag_view()
-	bag_view.set_inventory(inventory, 8)
+	var cell_size := 7 if inventory.cols >= 50 else 8
+	bag_view.set_inventory(inventory, cell_size)
+	refresh_item_slots(inventory)
 	bag_hint.text = Loc.t("bag_hint")
 	set_bag(inventory.used_cells(), inventory.capacity_cells())
 
 	bag_title.text = Loc.t("backpack") if tier == "" else "%s  ·  %s" % [Loc.t("backpack"), tier]
 	var panel := $Root/Bag/Panel as PanelContainer
-	var panel_width := maxf(300.0, float(inventory.cols * 8 + 40))
-	var panel_height := float(inventory.rows * 8 + 96)
+	var panel_width := maxf(300.0, float(inventory.cols * cell_size + 230))
+	var panel_height := maxf(226.0, float(inventory.rows * cell_size + 28)) + 80.0
 	panel.offset_left = -panel_width * 0.5
 	panel.offset_right = panel_width * 0.5
 	panel.offset_top = -panel_height * 0.5
 	panel.offset_bottom = panel_height * 0.5
 	bag_panel.visible = true
+	bottom_bar.hide()
 
 
 func close_bag() -> void:
@@ -235,6 +252,7 @@ func close_bag() -> void:
 	if bag_view != null:
 		bag_view._cancel_interaction()
 	bag_panel.visible = false
+	bottom_bar.visible = not death.visible
 
 
 func _on_bag_item_right_clicked(index: int) -> void:
@@ -273,6 +291,7 @@ func _on_bag_item_hovered(index: int) -> void:
 
 
 func _on_bag_item_moved(_index: int) -> void:
+	refresh_item_slots(bag_view.inventory)
 	bag_hint.text = Loc.t("bag_hint")
 
 
@@ -287,6 +306,7 @@ func show_end(title: String, subtitle: String, color: Color) -> void:
 	title_label.add_theme_color_override("font_color", color)
 	sub_label.text = subtitle
 	death.visible = true
+	bottom_bar.hide()
 	death.modulate.a = 0.0
 	var tween := create_tween()
 	tween.tween_property(death, "modulate:a", 1.0, 0.4)
@@ -294,6 +314,7 @@ func show_end(title: String, subtitle: String, color: Color) -> void:
 
 func hide_end() -> void:
 	death.visible = false
+	bottom_bar.visible = not bag_panel.visible
 
 
 func show_death() -> void:
@@ -302,3 +323,182 @@ func show_death() -> void:
 
 func hide_death() -> void:
 	hide_end()
+
+
+func _build_slots() -> void:
+	var content := HBoxContainer.new()
+	bag_box.add_child(content)
+	bag_box.move_child(content, 1)
+	character_slots = Control.new()
+	character_slots.custom_minimum_size = Vector2(190, 226)
+	content.add_child(character_slots)
+	var right := VBoxContainer.new()
+	content.add_child(right)
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 0)
+	right.add_child(bar)
+	for i in 9:
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(28, 28)
+		button.add_theme_font_size_override("font_size", 10)
+		button.pressed.connect(func(): activate_quick_slot(i))
+		_style_quick_slot(button, i)
+		bar.add_child(button)
+		quick_slots.append(button)
+	bottom_bar = HBoxContainer.new()
+	bottom_bar.name = "QuickItems"
+	$Root.add_child(bottom_bar)
+	bottom_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	bottom_bar.offset_left = -126
+	bottom_bar.offset_right = 126
+	bottom_bar.offset_top = -28
+	bottom_bar.offset_bottom = 0
+	bottom_bar.add_theme_constant_override("separation", 0)
+	for i in 9:
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(28, 28)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.add_theme_font_size_override("font_size", 10)
+		button.focus_mode = Control.FOCUS_NONE
+		button.pressed.connect(func(): activate_quick_slot(i))
+		_style_quick_slot(button, i)
+		bottom_bar.add_child(button)
+		bottom_slots.append(button)
+	bag_grid.reparent(right)
+	_build_equipment_layout()
+
+
+func refresh_item_slots(inventory: GridInventory) -> void:
+	for kind in equipment_buttons:
+		var slot: Button = equipment_buttons[kind]
+		var id := Meta.equipped_id(kind)
+		if kind == "backpack":
+			slot.icon = Game.tex("chest_empty_open_anim_f0")
+			slot.tooltip_text = Loc.t("pack_" + id) + "  %d x %d" % [Meta.bag_cols(), Meta.bag_rows()] + "\n" + Loc.t("pack_switch_hint")
+		else:
+			slot.icon = Game.tex(Meta.gear_texture(kind, id)) if id != "" else null
+			slot.tooltip_text = Loc.t("slot_" + kind)
+			if id != "":
+				slot.tooltip_text += "\n" + Loc.gear_name(id) + "  +%d %s" % [Meta.gear_bonus(kind, id), Loc.t("unit_dmg") if kind in ["weapon", "ring"] else Loc.t("unit_hp")]
+	var count := 0
+	for item in inventory.items:
+		if str(item.get("kind", "")) == "valuable" and str(item.get("id", "")) == "potion":
+			count += int(item.get("quantity", 1))
+	for i in 9:
+		if count == 0 and quick_bindings[i] == "potion":
+			quick_bindings[i] = ""
+		for slot in [quick_slots[i], bottom_slots[i]]:
+			slot.text = ""
+			var amount := slot.get_node("Amount") as Label
+			amount.text = str(count) if quick_bindings[i] == "potion" else ""
+			slot.icon = Game.tex("flask_big_red") if quick_bindings[i] == "potion" else null
+			slot.tooltip_text = "Drag potion here; press %d to use" % (i + 1)
+			slot.disabled = quick_bindings[i] == ""
+
+
+func _assign_quick_slot(index: int, position: Vector2) -> void:
+	if index < 0 or index >= bag_view.items.size():
+		return
+	var item: Dictionary = bag_view.items[index]
+	for kind in equipment_buttons:
+		if (equipment_buttons[kind] as Control).get_global_rect().has_point(position):
+			gear_equip.emit(index, kind)
+			return
+	if str(item.get("kind", "")) != "valuable" or str(item.get("id", "")) != "potion":
+		return
+	for i in 9:
+		if quick_slots[i].get_global_rect().has_point(position):
+			quick_bindings[i] = "potion"
+			refresh_item_slots(bag_view.inventory)
+			return
+
+
+func activate_quick_slot(index: int) -> void:
+	if index >= 0 and index < 9 and quick_bindings[index] == "potion":
+		potion_use.emit()
+
+
+func _is_quick_slot_target(position: Vector2) -> bool:
+	for kind in equipment_buttons:
+		if (equipment_buttons[kind] as Control).get_global_rect().has_point(position):
+			return true
+	for slot in quick_slots:
+		if slot.get_global_rect().has_point(position):
+			return true
+	return false
+
+
+func _style_quick_slot(button: Button, index: int) -> void:
+	button.focus_mode = Control.FOCUS_NONE
+	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.expand_icon = true
+	button.add_theme_constant_override("icon_max_width", 16)
+	button.add_theme_color_override("icon_disabled_color", Color.WHITE)
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color("#231720")
+		style.border_color = Color("#6b4632")
+		if state == "hover":
+			style.bg_color = Color("#33232d")
+			style.border_color = Color("#e8b563")
+		elif state == "pressed":
+			style.bg_color = Color("#141018")
+			style.border_color = Color("#e8b563")
+		elif state == "disabled":
+			style.bg_color = Color("#1a1317")
+			style.border_color = Color("#49332d")
+		style.set_border_width_all(2)
+		style.set_content_margin_all(3)
+		button.add_theme_stylebox_override(state, style)
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	var key := Label.new()
+	key.name = "Key"
+	key.text = str(index + 1)
+	key.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	key.position = Vector2(3, 0)
+	key.add_theme_font_size_override("font_size", 8)
+	key.add_theme_color_override("font_color", Color("#b89b79"))
+	key.add_theme_color_override("font_outline_color", Color("#141018"))
+	key.add_theme_constant_override("outline_size", 2)
+	button.add_child(key)
+	var amount := Label.new()
+	amount.name = "Amount"
+	amount.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	amount.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	amount.offset_right = -3
+	amount.offset_bottom = -1
+	amount.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	amount.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	amount.add_theme_font_size_override("font_size", 8)
+	amount.add_theme_color_override("font_color", Color("#f3e3c3"))
+	amount.add_theme_color_override("font_outline_color", Color("#141018"))
+	amount.add_theme_constant_override("outline_size", 2)
+	button.add_child(amount)
+
+
+func _build_equipment_layout() -> void:
+	character_preview = AnimatedSprite2D.new()
+	character_preview.sprite_frames = Game.frames(Meta.selected_hero)
+	character_preview.play("idle")
+	character_preview.position = Vector2(95, 100)
+	character_preview.scale = Vector2(2.5, 2.5)
+	character_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	character_slots.add_child(character_preview)
+	var positions := {
+		"head": Vector2(75, 0), "armor": Vector2(0, 46),
+		"arms": Vector2(150, 46), "weapon": Vector2(0, 100),
+		"ring": Vector2(150, 100), "legs": Vector2(75, 142),
+		"boots": Vector2(75, 186), "backpack": Vector2(150, 186),
+	}
+	for kind in positions:
+		var slot := Button.new()
+		_style_quick_slot(slot, 0)
+		(slot.get_node("Key") as Label).text = Loc.t("slot_" + kind)
+		slot.position = positions[kind]
+		slot.size = Vector2(40, 40)
+		slot.custom_minimum_size = Vector2(40, 40)
+		slot.tooltip_text = Loc.t("slot_" + kind)
+		if kind == "backpack":
+			slot.pressed.connect(func(): backpack_switch.emit())
+		character_slots.add_child(slot)
+		equipment_buttons[kind] = slot

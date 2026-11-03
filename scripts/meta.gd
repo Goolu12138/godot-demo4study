@@ -62,6 +62,15 @@ const ARMOR_SIZES := {
 	"plate": Vector2i(3, 4),
 }
 
+const BODY_GEAR := {
+	"head": {"iron_helmet": {"title": "IRON HELMET", "bonus": 1, "cost": 80, "texture": "ui_heart_half"}},
+	"legs": {"leather_leggings": {"title": "LEATHER LEGGINGS", "bonus": 1, "cost": 80, "texture": "ui_heart_half"}},
+	"boots": {"leather_boots": {"title": "LEATHER BOOTS", "bonus": 1, "cost": 60, "texture": "ui_heart_half"}},
+	"arms": {"iron_gauntlets": {"title": "IRON GAUNTLETS", "bonus": 1, "cost": 80, "texture": "ui_heart_half"}},
+	"ring": {"power_ring": {"title": "POWER RING", "bonus": 1, "cost": 150, "texture": "coin_anim_f0"}},
+}
+var body_equipment := {"head": "", "legs": "", "boots": "", "arms": "", "ring": ""}
+
 var gold := 0
 var selected_hero := "knight_m"
 ## 当前装备（带入局内，死了就没）。
@@ -97,6 +106,8 @@ func _ensure_stash() -> void:
 func load_data() -> void:
 	_ensure_stash()
 	stash.clear()
+	for slot in body_equipment:
+		body_equipment[slot] = ""
 	gold = 0
 	selected_hero = "knight_m"
 	_levels = {"vitality": 0, "swiftness": 0, "might": 0}
@@ -158,6 +169,10 @@ func load_data() -> void:
 	if not ARMORS.has(armor) or (armor != DEFAULT_ARMOR and owned_count("armor", armor) <= 0):
 		armor = DEFAULT_ARMOR
 
+	for slot in body_equipment:
+		var id := str(config.get_value("gear", slot, ""))
+		if gear_table(slot).has(id) and owned_count(slot, id) > 0:
+			body_equipment[slot] = id
 	if migrated:
 		save_data()
 
@@ -171,6 +186,8 @@ func save_data() -> void:
 		config.set_value("upgrades", key, _levels[key])
 	config.set_value("gear", "weapon", weapon)
 	config.set_value("gear", "armor", armor)
+	for slot in body_equipment:
+		config.set_value("gear", slot, body_equipment[slot])
 	config.set_value("run", "raids", raids)
 	config.set_value("run", "best_haul", best_haul)
 	config.set_value("run", "last_result", last_result)
@@ -333,11 +350,14 @@ func stash_remove_one(kind: String, id: String) -> bool:
 # ---------------------------------------------------------------- 装备数据
 
 func weapon_bonus() -> int:
-	return int(WEAPONS[weapon].bonus)
+	return int(WEAPONS[weapon].bonus) + equipped_bonus("ring")
 
 
 func armor_bonus() -> int:
-	return int(ARMORS[armor].bonus)
+	var total := int(ARMORS[armor].bonus)
+	for slot in ["head", "legs", "boots", "arms"]:
+		total += equipped_bonus(slot)
+	return total
 
 
 func weapon_texture() -> String:
@@ -345,11 +365,20 @@ func weapon_texture() -> String:
 
 
 func gear_table(kind: String) -> Dictionary:
-	return WEAPONS if kind == "weapon" else ARMORS
+	if kind == "weapon": return WEAPONS
+	if kind == "armor": return ARMORS
+	if kind == "backpack":
+		var packs := {}
+		for id in BACKPACKS:
+			packs[id] = {"title": id.to_upper() + " PACK", "bonus": 0, "cost": 0, "texture": "chest_empty_open_anim_f0"}
+		return packs
+	return BODY_GEAR.get(kind, {})
 
 
 func default_gear(kind: String) -> String:
-	return DEFAULT_WEAPON if kind == "weapon" else DEFAULT_ARMOR
+	if kind == "weapon": return DEFAULT_WEAPON
+	if kind == "armor": return DEFAULT_ARMOR
+	return ""
 
 
 func gear_title(kind: String, id: String) -> String:
@@ -377,18 +406,18 @@ func gear_size(kind: String, id: String) -> Vector2i:
 
 ## 生成一件带体积、贴图、说明的装备字典，供背包 / 仓库 / UI 共用。
 func make_gear_item(kind: String, id: String) -> Dictionary:
-	if kind != "weapon" and kind != "armor":
+	if gear_table(kind).is_empty():
 		return {}
 	var table := gear_table(kind)
 	if not table.has(id):
 		return {}
 	var size := gear_size(kind, id)
 	var bonus := int(table[id].bonus)
-	var unit := Loc.t("unit_dmg") if kind == "weapon" else Loc.t("unit_hp")
+	var unit := Loc.t("unit_dmg") if kind in ["weapon", "ring"] else Loc.t("unit_hp")
 	return {
 		"kind": kind,
 		"id": id,
-		"name": Loc.gear_name(id),
+		"name": Loc.t("pack_" + id) if kind == "backpack" else Loc.gear_name(id),
 		"tex": str(table[id].texture),
 		"bonus": bonus,
 		"bonus_text": Loc.t("gear_desc") % [bonus, unit],
@@ -411,7 +440,7 @@ func can_sell_gear(kind: String, id: String) -> bool:
 		return false
 	if owned_count(kind, id) <= 0:
 		return false
-	var equipped: String = weapon if kind == "weapon" else armor
+	var equipped: String = equipped_id(kind)
 	# 身上正穿着、且只剩这一件时不能卖，避免把装备卖空。
 	if id == equipped and owned_count(kind, id) <= 1:
 		return false
@@ -458,12 +487,21 @@ func stash_counts(kind: String) -> Dictionary:
 
 
 func equip_gear(kind: String, id: String) -> bool:
-	if not has_gear(kind, id):
+	if not gear_table(kind).has(id) or not has_gear(kind, id):
 		return false
+	if kind == "backpack":
+		if not owned_backpacks.has(id):
+			owned_backpacks.append(id)
+		stash_remove_one(kind, id)
+		return equip_backpack(id)
 	if kind == "weapon":
 		weapon = id
-	else:
+	elif kind == "armor":
 		armor = id
+	elif body_equipment.has(kind):
+		body_equipment[kind] = id
+	else:
+		return false
 	save_data()
 	return true
 
@@ -495,6 +533,11 @@ func buy_gear(kind: String, id: String) -> bool:
 
 ## 死亡 / 超时 / 放弃：背包由 main 清空，这里把身上的装备从仓库删掉。
 func lose_gear() -> void:
+	for slot in body_equipment:
+		var id := str(body_equipment[slot])
+		if id != "":
+			stash_remove_one(slot, id)
+			body_equipment[slot] = ""
 	if weapon != DEFAULT_WEAPON:
 		stash_remove_one("weapon", weapon)
 		weapon = DEFAULT_WEAPON
@@ -516,7 +559,7 @@ func finish_extraction(value: int, gear: Array) -> int:
 	for item in gear:
 		var kind := str(item.get("kind", ""))
 		var id := str(item.get("id", ""))
-		if (kind == "weapon" or kind == "armor") and stash_add(kind, id):
+		if not gear_table(kind).is_empty() and stash_add(kind, id):
 			stored += 1
 	last_result = Loc.t("result_extracted") % [value, stored]
 	save_data()
@@ -526,3 +569,15 @@ func finish_extraction(value: int, gear: Array) -> int:
 func record_result(text: String) -> void:
 	last_result = text
 	save_data()
+
+
+func equipped_id(kind: String) -> String:
+	if kind == "weapon": return weapon
+	if kind == "armor": return armor
+	if kind == "backpack": return backpack
+	return str(body_equipment.get(kind, ""))
+
+
+func equipped_bonus(kind: String) -> int:
+	var id := equipped_id(kind)
+	return gear_bonus(kind, id) if gear_table(kind).has(id) else 0
